@@ -48,8 +48,8 @@ class Counterpart(da.DataAnalysis):
             print target,":",scale,hk
             return hk['std bkg']*(3+hk['maxsig'])*hk['timebin']
 
-        scales=[1,]
-#        scales=[0.1,1,8]
+        #scales=[1,]
+        scales=[8]
         
         for scale in scales:
             acs_lim=get_count_limit("ACS",scale)
