@@ -11,6 +11,7 @@ from astropy import units as u
 from numpy import *
 import string
 import sys
+import gzip
 
 import integralclient
 
@@ -19,32 +20,52 @@ class Counterpart(da.DataAnalysis):
     utc=None
 
     def main(self):
-
         self.sc=integralclient.get_sc(self.utc)
 
-        response_mp=array(integralclient.get_response_map(target="ACS",lt=100,alpha=-0.5,epeak=1000,kind="response"))
-        response_mp_veto=array(integralclient.get_response_map(target="VETO",lt=80,alpha=-0.5,epeak=1000,kind="response"))
-        response_mp_picsit=array(integralclient.get_response_map(target="PICsIT",lt=80,alpha=-0.5,epeak=1000,kind="response"))
+        response_mp=array(integralclient.get_response_map(target="ACS",lt=100,alpha=-0.5,epeak=500,kind="response"))
+        response_mp_veto=array(integralclient.get_response_map(target="VETO",lt=80,alpha=-0.5,epeak=500,kind="response"))
+        response_mp_isgri=array(integralclient.get_response_map(target="ISGRI",lt=80,alpha=-0.5,epeak=500,kind="response"))
 
         def get_count_limit(target,scale):
-            acshk=integralclient.get_hk(target=target,utc=self.utc,span=30.01,t1=0,t2=0,ra=0,dec=0,rebin=scale)['lc']
-            print "ACS:",scale,acshk
-            return acshk['std bkg']*3+acshk['maxsig']
+            hk=integralclient.get_hk(target=target,utc=self.utc,span=30.01,t1=0,t2=0,ra=0,dec=0,rebin=scale)['lc']
+            print target,":",scale,hk
+            return hk['std bkg']*(3+hk['maxsig'])*hk['timebin']
 
-        scales=[0.1,1,10]
+        #scales=[1,]
+        scales=[0.1,1,8]
         
         for scale in scales:
             acs_lim=get_count_limit("ACS",scale)
             veto_lim=get_count_limit("VETO",scale)
-            picsit_lim=get_count_limit("SPTI1234",scale)
+            isgri_lim=get_count_limit("ISGRI",scale)
+
+            print "ACS, Veto, ISGRI",acs_lim,veto_lim,isgri_lim
        
-            sens_mp=response_mp*acs_lim
+            sens_mp_acs=response_mp*acs_lim
             sens_mp_veto=response_mp_veto*veto_lim
-            sens_mp_picsit=response_mp_picsit*picsit_lim
+            sens_mp_isgri=response_mp_isgri*isgri_lim
+            sens_mp=response_mp*acs_lim
             sens_mp[sens_mp>sens_mp_veto]=sens_mp_veto[sens_mp>sens_mp_veto]
 
+            na=sens_mp[~isnan(sens_mp) & (sens_mp>0)].min()
+
+            na_e=int(log10(na))
+            na_b=int(na*10/10**na_e)/10.
+
+            na=na_b*10**na_e
+
+            print "best ACS",na
+            nv=sens_mp_veto[~isnan(sens_mp_veto) & (sens_mp_veto>0)].min()
+            print "best VETO",nv
+            sens_mp/=na
+            sens_mp_veto/=na
+
+            self.sens_scale=na
+            self.sens_scale_e=na_e
+            self.sens_scale_b=na_b
+
             self.sens_mp=sens_mp
-            self.sens_mp_picsit=sens_mp_picsit
+            self.sens_mp_isgri=sens_mp_isgri
             self.compute_map()
 
     def get_grid_for_map(self,mp):
@@ -62,14 +83,17 @@ class Counterpart(da.DataAnalysis):
 
     def compute_map(self):
         sens_mp=self.sens_mp
-        ####
+
+#        sky_coord=self.get_grid_for_map(map_px)
+#        sens_coord=self.get_grid_for_map(sens_mp)
 
         map_px=healpy.read_map(self.target_map_fn)
         
         nside=healpy.npix2nside(map_px.shape[0])
-
         npx=arange(healpy.nside2npix(nside))
+
         theta_rad,ra_rad=healpy.pix2ang(nside,npx)
+
         ra=ra_rad/pi*180
         phi_rad=ra_rad
         phi=ra
@@ -77,24 +101,6 @@ class Counterpart(da.DataAnalysis):
         dec=90-theta #!!!
         #dec=theta-90 #!!!
         dec_rad=dec/180*pi
-        
-        ### source!
-        sky_coord=self.get_grid_for_map(map_px)
-        sens_coord=self.get_grid_for_map(sens_mp)
-
-        for body_name in "earth","moon","sun":
-            bd=self.sc['bodies'][body_name]
-            body_coord=SkyCoord(bd['body_in_sc'][1],bd['body_in_sc'][0],1,unit=(u.deg,u.deg),representation="physicsspherical")
-            print("body:",body_name,bd)
-            sens_mp[sens_coord.separation(body_coord).degree<bd["body_size"]]=1e9
-        #map_px=s
-        #map_px[map_px>3.]=0
-        ### /source
-
-        healpy.mollview(map_px,cmap="YlOrBr")
-        healpy.graticule()
-
-        #fig=healtics.plot_with_ticks(map_px,cmap="YlOrBr")
 
         x=cos(ra_rad)*cos(dec_rad)
         y=sin(ra_rad)*cos(dec_rad)
@@ -217,34 +223,19 @@ class Counterpart(da.DataAnalysis):
         a=x_scpx*x_scz+y_scpx*y_scz+z_scpx*z_scz
         print a.max(),a.min()
 
-        #phi_rad=arccos(a)
-        #phi=phi_rad/pi*180
-
-        #nprint phi_rad.max(),phi_rad.min()
-
-        #m=x_scpx*x_scy+y_scpx*y_scy+z_scpx*z_scy<0
-        #phi_rad[m]=360-phi_rad[m]
-
         Theta_sc_rad,Phi_sc_rad=healpy.pix2ang(nside,npx)
         Theta_sc=Theta_sc_rad/pi*180
         Phi_sc=Phi_sc_rad/pi*180
 
-        #print "sat grid Theta,Phi",Theta_sc,Phi_sc
-        
         Ra_sc_rad=Phi_sc_rad
         Dec_sc_rad=Theta_sc_rad-pi/2.
        
-        #print "sat grid Ra,Dec",Ra_sc,Dec_sc
-        
         Y_sc=sin(Ra_sc_rad)*sin(Theta_sc_rad)
         Z_sc=cos(Ra_sc_rad)*sin(Theta_sc_rad)
         X_sc=cos(Theta_sc_rad)
 
         i=argmin(Theta_sc_rad)
                 
-
-        #print "sat grid X,Y,Z",X_sc,Y_sc,Z_sc
-
         x_sc=X_sc*x_scx+Y_sc*x_scy+Z_sc*x_scz
         y_sc=X_sc*y_scx+Y_sc*y_scy+Z_sc*y_scz
         z_sc=X_sc*z_scx+Y_sc*z_scy+Z_sc*z_scz
@@ -261,16 +252,6 @@ class Counterpart(da.DataAnalysis):
 
         map_px2=map_px[:]
 
-        #map_px[abs(theta_sc)<3]=map_px.max()
-        #map_px[(abs(theta_sc-90)<2) & (abs(phi_sc-0)<2)]=map_px.max()/2
-        #map_px[(abs(theta_sc-30)<2)]=map_px.max()/2
-        #map_px[(abs(theta_sc-60)<2)]=map_px.max()/2
-        #map_px[(abs(theta_sc-120)<2)]=map_px.max()/2
-        #map_px[(abs(theta_sc-150)<2)]=map_px.max()/2
-        #map_px[abs(theta_sc-90)<2]=map_px.max()
-        #map_px[abs(theta_sc-135)<2]=map_px.max()
-        #map_px[abs(theta_sc-180)<2]=map_px.max()
-        
         theta_rad,phi_rad=healpy.pix2ang(nside,npx)
         theta=theta_rad/pi*180
         phi=phi_rad/pi*180
@@ -313,12 +294,6 @@ class Counterpart(da.DataAnalysis):
         map_px2[abs(theta_insc)>140]+=map_px.max()/5.
         
 
-        #map_px=healpy.get_interp_val(map_sc,theta_rad,phi_rad)
-       # map_px[theta_insc<20]+=map_px.max()/5.
-        #map_px[abs(phi_sc)<30]+=map_px.max()/10.
-        #map_px[abs(theta_sc)>140]+=map_px.max()/5.
-        ##!!!
-
         p=healpy.mollview(map_px2,cmap='YlOrBr')
         healpy.projtext(phi_scx,dec_scx,"SCX",lonlat=True)
         healpy.projscatter(phi_scx,dec_scx,lonlat=True)
@@ -331,33 +306,11 @@ class Counterpart(da.DataAnalysis):
         healpy.graticule()
         #plot.plot("sky_sens.png")
 
-        
-        if False:
-            for sel_ra,sel_dec in zip(selected_positions['RA'],selected_positions['DEC'])+[(ra_scx,dec_scx),(ra_scz,dec_scz),(ra_scy,dec_scy)]:
-                print "selected",sel_ra,sel_dec
-                sel_theta=sel_dec+90
-                sel_phi=sel_ra-pi
-                sel_d2=(sel_theta-theta)**2+(sel_phi-phi)**2
-                sel_m=sel_d2<(0.2)**2
-                print theta_sc[sel_m],phi_sc[sel_m]
-
-        #sens_mp=loadtxt("/Integral/throng/savchenk/projects/spiacs/spiacsmodel/python/ligo/LVT151012/acs_map.txt")*1810/1e-7 * 1.15
-        #sens_mp_veto=loadtxt("/Integral/throng/savchenk/projects/spiacs/spiacsmodel/python/ligo/LVT151012/veto_map.txt")*1010/1e-7*8**0.5 * 1.15
-
-        #sens_mp=loadtxt("../../../mp_0.075-2_grbm_al_-0.5_bet_-2.5_e0_1.txt")*1410*1e-10/1e-7 * 1.15
-
-        #sens_mp=loadtxt("compton_map.txt")
-        #sens_mp=loadtxt("../mp_0.075-2_grbm_al_-0.5_bet_-1.5_e0_1.txt")*3
-        #sens_mp=loadtxt("../mp_0.075-2_grbm_al_-1_bet_-2.5_e0_0.5.txt")*3
-        #sens_mp=loadtxt("../mp_0.075-2_grbm_al_-1.5_bet_-2.5_e0_0.3.txt")*3
-        #sens_mp=loadtxt("../mp.txt")*3
         sens_mp_sky=healpy.get_interp_val(sens_mp,pi-theta_insc_rad,phi_insc_rad-pi) ##
         sens_mp_sc=healpy.get_interp_val(sens_mp,pi-theta_rad,phi_rad-pi) ##
-        #sens_mp_sky=healpy.get_interp_val(sens_mp,theta_insc_rad,phi_insc_rad-pi) ##
-       # sens_mp_sc=healpy.get_interp_val(sens_mp,theta_rad,phi_rad-pi) ##
 
 
-        sens_mp_picsit=self.sens_mp_picsit
+        sens_mp_picsit=self.sens_mp_isgri
         sens_mp_picsit=sens_mp_picsit.max()/sens_mp_picsit
         sens_mp_picsit[isnan(sens_mp_picsit)]=0
         sens_mp_picsit[isinf(sens_mp_picsit)]=0
@@ -385,29 +338,22 @@ class Counterpart(da.DataAnalysis):
         map_px=healpy.sphtfunc.smoothing(map_px,2./180.*pi)
 
         if True:
-            o_isgrimap=loadtxt("isgri_sens.txt")
+            o_isgrimap=loadtxt(gzip.open("isgri_sens.txt.gz"))
             o_isgrimap[isnan(o_isgrimap) | isinf(o_isgrimap)]=0
             isgrimap=healpy.get_interp_val(o_isgrimap,theta_rad,phi_rad)
 
-            o_jemxmap=loadtxt("jemx_sens.txt")
+            o_jemxmap=loadtxt(gzip.open("jemx_sens.txt.gz"))
             o_jemxmap[isnan(o_jemxmap) | isinf(o_jemxmap)]=0
             jemxmap=healpy.get_interp_val(o_jemxmap,theta_rad,phi_rad)
             
-            o_spimap=loadtxt("spi_sens.txt")
+            o_spimap=loadtxt(gzip.open("spi_sens.txt.gz"))
             o_spimap[isnan(o_spimap) | isinf(o_spimap)]=0
             spimap=healpy.get_interp_val(o_spimap,theta_rad,phi_rad)
         
-        ## mess up
         theta_rad,phi_rad=healpy.pix2ang(nside,npx)
-   #     phi_rad+=pi/2.*3
         phi_rad[phi_rad>2*pi]=phi_rad[phi_rad>2*pi]-2*pi
         sens_mp_sky=healpy.get_interp_val(sens_mp_sky,theta_rad,phi_rad)
         map_px=healpy.get_interp_val(map_px,theta_rad,phi_rad)
-
-        #p=healtics.plot_with_ticks(sens_mp_picsit_sky,cmap="YlOrBr",title="INTEGRAL SPI-ACS 3 sigma upper limit in 1 second",overplot=map_px,vmin=1.5,vmax=15/2.)
-        #p=healtics.plot_with_ticks(sens_mp_sky,cmap="YlOrBr",title="INTEGRAL SPI-ACS 3 sigma upper limit in 1 second",overplot=[(map_px,"gist_gray",None)],vmin=1.5,vmax=15)
-        
-        # containment 
 
 
         for detname,detmap,o_detmap in [("isgri",isgrimap,o_isgrimap),
@@ -430,18 +376,28 @@ class Counterpart(da.DataAnalysis):
         print "contained in <80",map_px[cover].sum(),sum(cover)*1./cover.shape[0],sum(cover)*1./cover.shape[0]*4*pi*(180/pi)**2
  #       sens_mp_sky[]*=2
 
+        for body_name in "earth","moon","sun":
+            bd=self.sc['bodies'][body_name]
+            body_coord_sc=SkyCoord(bd['body_in_sc'][1],bd['body_in_sc'][0],1,unit=(u.deg,u.deg),representation="physicsspherical")
+            body_coord=SkyCoord(bd['body_ra'],bd['body_dec'],unit=(u.deg,u.deg))
+            print("body:",body_name,bd)
+            print("body coordinates:",bd['body_ra'],bd['body_dec'],body_coord)
+            sens_mp_sky[sky_coord.separation(body_coord).degree<bd["body_size"]]=1e9
 
-        p=healtics.plot_with_ticks(sens_mp_sky,cmap="YlOrBr",title="",overplot=[(map_px,"gist_gray",None),(spimap,"summer",20),(jemxmap,"winter",20**2),(isgrimap,"autumn",20**2)],vmin=1,vmax=10)
+        p=healtics.plot_with_ticks(sens_mp_sky*self.sens_scale_b,cmap="YlOrBr",title="",overplot=[(map_px,"gist_gray",None),(spimap,"summer",20),(jemxmap,"winter",20**2),(isgrimap,"autumn",20**2)],unit="$10^{%i} \mathrm{erg^{}cm^{-2} s^{-1}}$"%self.sens_scale_e,vmin=self.sens_scale_b,vmax=10*self.sens_scale_b)
+
         #p=healtics.plot_with_ticks(sens_mp_sky,cmap="jet",title="INTEGRAL SPI-ACS 3 sigma upper limit in 1 second",overplot=[(map_px,"gist_gray",None),(spimap,"summer",20),(jemxmap,"winter",20**2),(isgrimap,"autumn",20**2)],vmin=0,vmax=sens_mp_sky.max())
         #p=healtics.plot_with_ticks(sens_mp_sky,cmap="YlOrBr",title="INTEGRAL SPI-ACS 3 sigma upper limit in 1 second",overplot=[(map_px,"gist_gray",None),(spimap,"summer",20),(jemxmap,"winter",20**2),(isgrimap,"autumn",20**2)],vmin=0,vmax=sens_mp_sky.max())
         #p=healtics.plot_with_ticks(sens_mp_sky,cmap="YlOrBr",title="INTEGRAL SPI-ACS 3 sigma upper limit in 1 second",overplot=healpy.sphtfunc.smoothing(map_px,5./180.*pi),vmin=1.5,vmax=15)
+
         healpy.projtext(phi_scx,theta_scx,"SCX",lonlat=True)
         healpy.projscatter(phi_scx,theta_scx,lonlat=True)
         healpy.projtext(ra_scz,theta_scz,"SCZ",lonlat=True) #.set_z_order(20)
         healpy.projscatter(ra_scz,theta_scz,lonlat=True)
         healpy.projtext(ra_scy,dec_scy,"SCY",lonlat=True) #.set_z_order(20)
         healpy.projscatter(ra_scy,dec_scy,lonlat=True)
-        plot.plot("sky_sens.svg", format='svg', dpi=200)
+        #plot.plot("sky_sens.svg", format='svg', dpi=200)
+        plot.plot("sky_sens.png", format='png', dpi=100)
         #plot.plot("sky_sens.svg", format='svg', dpi=1000)
         #p=healtics.plot_with_ticks(sens_mp_sky,cmap="YlOrBr",title="INTEGRAL SPI-ACS 3 sigma upper limit in 1 second",overplot=healpy.sphtfunc.smoothing(map_px,5./180.*pi),vmin=1.5,vmax=15)
         
