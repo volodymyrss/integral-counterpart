@@ -30,7 +30,8 @@ def transform_rmap(rmap):
 class Counterpart(da.DataAnalysis):
     target_map_fn=None
     utc=None
-
+    
+    syst=0.2
 
     def main(self):
         self.sc=integralclient.get_sc(self.utc)
@@ -39,9 +40,12 @@ class Counterpart(da.DataAnalysis):
         self.nside = healpy.npix2nside(self.target_map.shape[0])
         self.compute_transform_grids()
 
-        response_mp_acs = transform_rmap(array(integralclient.get_response_map(target="ACS", lt=100, alpha=-0.5, epeak=500, kind="response")))
-        response_mp_veto = transform_rmap(array(integralclient.get_response_map(target="VETO", lt=80, alpha=-0.5, epeak=500, kind="response")))
-        response_mp_isgri = transform_rmap(array(integralclient.get_response_map(target="ISGRI", lt=30, alpha=-0.5, epeak=500, kind="response")))
+        response_mp_acs = transform_rmap(array(integralclient.get_response_map(target="ACS", lt='map2', alpha=-0.5, epeak=600, kind="response")))
+        response_mp_veto = transform_rmap(array(integralclient.get_response_map(target="VETO", lt=100, alpha=-0.5, epeak=600, kind="response")))
+        response_mp_isgri = transform_rmap(array(integralclient.get_response_map(target="ISGRI", lt=30, alpha=-0.5, epeak=600, kind="response")))
+        response_mp_picsit = transform_rmap(array(integralclient.get_response_map(target="PICsIT", lt=250, alpha=-0.5, epeak=600, kind="response")))
+
+        print "best response ACS, Veto, ISGRI",response_mp_acs.min(),response_mp_veto.min(),response_mp_isgri.min()
 
         def get_count_limit(target,scale):
             hk=integralclient.get_hk(target=target,utc=self.utc,span=30.01,t1=0,t2=0,ra=0,dec=0,rebin=scale)['lc']
@@ -49,12 +53,14 @@ class Counterpart(da.DataAnalysis):
             return hk['std bkg']*(3+hk['maxsig'])*hk['timebin']
 
         #scales=[1,]
-        scales=[8]
+        scales=[1,8,0.1]
         
         for scale in scales:
             acs_lim=get_count_limit("ACS",scale)
             veto_lim=get_count_limit("VETO",scale)
             isgri_lim=get_count_limit("ISGRI",scale)
+            picsit_lim=isgri_lim*10
+
             #acs_lim=300
             #veto_lim=300
             #isgri_lim=300
@@ -62,15 +68,18 @@ class Counterpart(da.DataAnalysis):
 
             print "ACS, Veto, ISGRI",acs_lim,veto_lim,isgri_lim
        
-            sens_map_acs=response_mp_acs*acs_lim
-            sens_map_veto=response_mp_veto*veto_lim
-            sens_map_isgri=response_mp_isgri*isgri_lim
-            sens_map=response_mp_acs*acs_lim
+            sens_map=response_mp_acs*acs_lim*(self.syst+1)
+            sens_map_acs=response_mp_acs*acs_lim*(self.syst+1)
+            sens_map_veto=response_mp_veto*veto_lim*(self.syst+1)
+            sens_map_isgri=response_mp_isgri*isgri_lim*(self.syst+1)
+            sens_map_picsit=response_mp_picsit*picsit_lim*(self.syst+1)
             sens_map[sens_map>sens_map_veto]=sens_map_veto[sens_map>sens_map_veto]
+            sens_map[sens_map>sens_map_isgri]=sens_map_isgri[sens_map>sens_map_isgri]
+            sens_map[sens_map>sens_map_picsit]=sens_map_picsit[sens_map>sens_map_picsit]
 
             na=sens_map[~isnan(sens_map) & (sens_map>0)].min()
 
-            na_e=int(log10(na))
+            na_e=int(log10(na))-1
             na_b=int(na*10/10**na_e)/10.
 
             na=na_b*10**na_e
@@ -78,10 +87,13 @@ class Counterpart(da.DataAnalysis):
             print "best ACS",na
             nv=sens_map_veto[~isnan(sens_map_veto) & (sens_map_veto>0)].min()
             print "best VETO",nv
-            sens_map/=na
-            sens_map_veto/=na
+            self.sens_scale=na_b*10**na_e
+            sens_map/=self.sens_scale
+            sens_map_veto/=self.sens_scale
+            sens_map_acs/=self.sens_scale
+            sens_map_isgri/=self.sens_scale
+            sens_map_picsit/=self.sens_scale
 
-            self.sens_scale=na
             self.sens_scale_e=na_e
             self.sens_scale_b=na_b
 
@@ -89,7 +101,76 @@ class Counterpart(da.DataAnalysis):
             self.sens_map_acs = sens_map_acs
             self.sens_map_veto = sens_map_veto
             self.sens_map_isgri=sens_map_isgri
-            self.compute_map()
+            self.sens_map_picsit=sens_map_picsit
+
+            self.tag="_%.5lgs"%scale
+
+            self.localization()
+            self.compute_maps()
+
+
+    def localization(self):
+        syst=0.02
+
+        fluence=self.sens_map_acs.min()*10
+
+        print "fluence for 10 sigma in ACS:",fluence
+
+        sig_map_acs=fluence/self.sens_map_acs
+        sig_map_veto=fluence/self.sens_map_veto
+        sig_map_isgri=fluence/self.sens_map_isgri
+        sig_map_picsit=fluence/self.sens_map_picsit
+
+        if False:
+            figure()
+            scatter(sig_map_acs,sig_map_picsit,c=coord.theta)
+            colorbar()
+
+            figure()
+            scatter(sig_map_acs,sig_map_veto,c=coord.theta)
+            colorbar()
+
+            figure()
+            scatter(sig_map_acs,sig_map_isgri,c=coord.theta)
+            colorbar()
+
+            figure()
+            scatter(sig_map_veto,sig_map_picsit,c=coord.theta)
+            colorbar()
+
+
+        allmaps=[]
+        allsig=[sig_map_acs,
+                sig_map_veto,
+                sig_map_isgri,
+                sig_map_picsit]
+
+        for m1 in allsig:
+            for m2 in allsig:
+                #m1=m1/sig_map_acs*sig_map_acs.max()
+                #m2=m1/sig_map_acs*sig_map_acs.max()
+                
+                ang0=arctan2(m1,m2)
+                h0=histogram(ang0.flatten(),100)
+                ang1=arctan2((m1-1)*(1-syst),(m2+1)*(1+syst))
+                ang2=arctan2((m1+1)*(1+syst),(m2-1)*(1-syst))
+                
+                areas=[sum((ang0[i]>ang1) & (ang0[i]<ang2)) for i in range(ang0.shape[0])]
+                                    
+                area=(array(areas)*healpy.nside2pixarea(16))
+                area/=4*pi
+
+                allmaps.append(area)
+
+        bestarea=array(allmaps).min(0)
+        healpy.mollview(bestarea)
+        self.bestarea=bestarea
+        plot.plot("bestlocalization.png")
+
+        plot.p.figure()
+        plot.p.a=plot.p.hist(bestarea,logspace(-5,-0.5,100),log=True)
+        plot.p.semilogx()
+        plot.plot("bestlocalization_hist.png")
 
     def get_grid(self,nside=None):
         nside=nside if nside is not None else self.nside
@@ -165,7 +246,7 @@ class Counterpart(da.DataAnalysis):
         healpy.graticule()
         plot.plot()
 
-    def compute_map(self):
+    def compute_maps(self):
         healpy.mollview(self.sens_map_acs, cmap="YlOrBr")
         healpy.graticule()
 
@@ -175,6 +256,8 @@ class Counterpart(da.DataAnalysis):
         sens_map_sky_acs = healpy.sphtfunc.smoothing(self.sc_map_in_sky(self.sens_map_acs), 5. / 180. * pi)
         sens_map_sky_veto = healpy.sphtfunc.smoothing(self.sc_map_in_sky(self.sens_map_veto), 5. / 180. * pi)
         sens_map_sky_isgri = healpy.sphtfunc.smoothing(self.sc_map_in_sky(self.sens_map_isgri), 5. / 180. * pi)
+        sens_map_sky_picsit = healpy.sphtfunc.smoothing(self.sc_map_in_sky(self.sens_map_picsit), 5. / 180. * pi)
+        bestarea_sky = healpy.sphtfunc.smoothing(self.sc_map_in_sky(self.bestarea), 5. / 180. * pi)
 
         good_mask=lambda x:sens_map_sky<sens_map_sky.min()*x
         print "good for",[sum(self.target_map[good_mask(x)]) for x in [1.01,1.1,1.2,1.5,2.]]
@@ -239,21 +322,42 @@ class Counterpart(da.DataAnalysis):
                                                (jemxmap, "winter", 20 ** 2), (isgrimap, "autumn", 20 ** 2)],
                                      unit="$10^{%i} \mathrm{erg^{}cm^{-2} s^{-1}}$" % self.sens_scale_e,
                                      vmin=self.sens_scale_b, vmax=10 * self.sens_scale_b)
-        plot.plot("sky_sens.png", format='png', dpi=100)
+        plot.plot("sky_sens_"+self.tag+".png", format='png', dpi=100)
+
+        p = healtics.plot_with_ticks(sens_map_sky_acs * self.sens_scale_b, cmap="YlOrBr", title="",
+                                     overplot=[(target_map_sm, "gist_gray", None), (spimap, "summer", 20),
+                                               (jemxmap, "winter", 20 ** 2), (isgrimap, "autumn", 20 ** 2)],
+                                     unit="$10^{%i} \mathrm{erg^{}cm^{-2} s^{-1}}$" % self.sens_scale_e,
+                                     vmin=self.sens_scale_b, vmax=10 * self.sens_scale_b)
+        plot.plot("sky_sens_acs_"+self.tag+".png", format='png', dpi=100)
 
         p = healtics.plot_with_ticks(sens_map_sky_veto * self.sens_scale_b, cmap="YlOrBr", title="",
                                      overplot=[(target_map_sm, "gist_gray", None), (spimap, "summer", 20),
                                                (jemxmap, "winter", 20 ** 2), (isgrimap, "autumn", 20 ** 2)],
                                      unit="$10^{%i} \mathrm{erg^{}cm^{-2} s^{-1}}$" % self.sens_scale_e,
                                      vmin=self.sens_scale_b, vmax=10 * self.sens_scale_b)
-        plot.plot("sky_sens_veto.png", format='png', dpi=100)
+        plot.plot("sky_sens_veto_"+self.tag+".png", format='png', dpi=100)
 
         p = healtics.plot_with_ticks(sens_map_sky_isgri * self.sens_scale_b, cmap="YlOrBr", title="",
                                      overplot=[(target_map_sm, "gist_gray", None), (spimap, "summer", 20),
                                                (jemxmap, "winter", 20 ** 2), (isgrimap, "autumn", 20 ** 2)],
                                      unit="$10^{%i} \mathrm{erg^{}cm^{-2} s^{-1}}$" % self.sens_scale_e,
                                      vmin=self.sens_scale_b, vmax=10 * self.sens_scale_b)
-        plot.plot("sky_sens_isgri.png", format='png', dpi=100)
+        plot.plot("sky_sens_isgri_"+self.tag+".png", format='png', dpi=100)
+        
+        p = healtics.plot_with_ticks(sens_map_sky_picsit * self.sens_scale_b, cmap="YlOrBr", title="",
+                                     overplot=[(target_map_sm, "gist_gray", None), (spimap, "summer", 20),
+                                               (jemxmap, "winter", 20 ** 2), (isgrimap, "autumn", 20 ** 2)],
+                                     unit="$10^{%i} \mathrm{erg^{}cm^{-2} s^{-1}}$" % self.sens_scale_e,
+                                     vmin=self.sens_scale_b, vmax=10 * self.sens_scale_b)
+        plot.plot("sky_sens_picsit_"+self.tag+".png", format='png', dpi=100)
+        
+        p = healtics.plot_with_ticks(bestarea_sky*100, cmap="YlOrBr", title="",
+                                     overplot=[(target_map_sm, "gist_gray", None), (spimap, "summer", 20),
+                                               (jemxmap, "winter", 20 ** 2), (isgrimap, "autumn", 20 ** 2)],
+                                     unit="% of the sky",
+                                     vmin=1, vmax=100)
+        plot.plot("sky_sens_picsit_"+self.tag+".png", format='png', dpi=100)
 
         #p=healtics.plot_with_ticks(sens_mp_sky,cmap="jet",title="INTEGRAL SPI-ACS 3 sigma upper limit in 1 second",overplot=[(map_px,"gist_gray",None),(spimap,"summer",20),(jemxmap,"winter",20**2),(isgrimap,"autumn",20**2)],vmin=0,vmax=sens_mp_sky.max())
         #p=healtics.plot_with_ticks(sens_mp_sky,cmap="YlOrBr",title="INTEGRAL SPI-ACS 3 sigma upper limit in 1 second",overplot=[(map_px,"gist_gray",None),(spimap,"summer",20),(jemxmap,"winter",20**2),(isgrimap,"autumn",20**2)],vmin=0,vmax=sens_mp_sky.max())
