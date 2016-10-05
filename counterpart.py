@@ -269,7 +269,7 @@ class Counterpart(da.DataAnalysis):
         #map_sc=healpy.sphtfunc.smoothing(map_sc,5./180.*pi)
         target_map_sm=healpy.sphtfunc.smoothing(self.target_map,2./180.*pi)
 
-        if True:
+        try:
             o_isgrimap=loadtxt(gzip.open("isgri_sens.txt.gz"))
             o_isgrimap[isnan(o_isgrimap) | isinf(o_isgrimap)]=0
             isgrimap=healpy.get_interp_val(o_isgrimap,
@@ -291,13 +291,19 @@ class Counterpart(da.DataAnalysis):
                                             self.sky_coord.represent_as("physicsspherical").phi.rad,
                                            )
 
-        for detname,detmap,o_detmap in [("isgri",isgrimap,o_isgrimap),
-                               ("jemx",jemxmap,o_jemxmap),
-                               ("spi",spimap**2,o_spimap**2)]:
-            bestsens=min(o_detmap[o_detmap>5.9e-6**2])
-            print "min",bestsens,bestsens**0.5
-            cover=(detmap<bestsens*20**2) & (detmap>0)
-            print "contained in",detname,self.target_map.sum(),self.target_map[cover].sum(),sum(cover)*1./cover.shape[0],sum(cover)*1./cover.shape[0]*4*pi*(180/pi)**2
+            for detname,detmap,o_detmap in [("isgri",isgrimap,o_isgrimap),
+                                   ("jemx",jemxmap,o_jemxmap),
+                                   ("spi",spimap**2,o_spimap**2)]:
+                bestsens=min(o_detmap[o_detmap>5.9e-6**2])
+                print "min",bestsens,bestsens**0.5
+                cover=(detmap<bestsens*20**2) & (detmap>0)
+                print "contained in",detname,self.target_map.sum(),self.target_map[cover].sum(),sum(cover)*1./cover.shape[0],sum(cover)*1./cover.shape[0]*4*pi*(180/pi)**2
+            overplot=[(target_map_sm, "gist_gray", None), (spimap, "summer", 20),
+                       (jemxmap, "winter", 20 ** 2), (isgrimap, "autumn", 20 ** 2)],
+        except:
+            overplot=[(target_map_sm, "gist_gray", None)]
+
+
 
         #cover=theta_sc_rad>120./180*pi
         #print "contained in >120",map_px[cover].sum(),sum(cover)*1./cover.shape[0],sum(cover)*1./cover.shape[0]*4*pi*(180/pi)**2
@@ -318,46 +324,40 @@ class Counterpart(da.DataAnalysis):
             sens_map_sky[self.sky_coord.separation(body_coord).degree<bd["body_size"]]=1e9
 
         p = healtics.plot_with_ticks(sens_map_sky * self.sens_scale_b, cmap="YlOrBr", title="",
-                                     overplot=[(target_map_sm, "gist_gray", None), (spimap, "summer", 20),
-                                               (jemxmap, "winter", 20 ** 2), (isgrimap, "autumn", 20 ** 2)],
                                      unit="$10^{%i} \mathrm{erg^{}cm^{-2} s^{-1}}$" % self.sens_scale_e,
+                                     overplot=overplot,
                                      vmin=self.sens_scale_b, vmax=10 * self.sens_scale_b)
         plot.plot("sky_sens_"+self.tag+".png", format='png', dpi=100)
 
         p = healtics.plot_with_ticks(sens_map_sky_acs * self.sens_scale_b, cmap="YlOrBr", title="",
-                                     overplot=[(target_map_sm, "gist_gray", None), (spimap, "summer", 20),
-                                               (jemxmap, "winter", 20 ** 2), (isgrimap, "autumn", 20 ** 2)],
+                                     overplot=overplot,
                                      unit="$10^{%i} \mathrm{erg^{}cm^{-2} s^{-1}}$" % self.sens_scale_e,
                                      vmin=self.sens_scale_b, vmax=10 * self.sens_scale_b)
         plot.plot("sky_sens_acs_"+self.tag+".png", format='png', dpi=100)
 
         p = healtics.plot_with_ticks(sens_map_sky_veto * self.sens_scale_b, cmap="YlOrBr", title="",
-                                     overplot=[(target_map_sm, "gist_gray", None), (spimap, "summer", 20),
-                                               (jemxmap, "winter", 20 ** 2), (isgrimap, "autumn", 20 ** 2)],
+                                     overplot=overplot,
                                      unit="$10^{%i} \mathrm{erg^{}cm^{-2} s^{-1}}$" % self.sens_scale_e,
                                      vmin=self.sens_scale_b, vmax=10 * self.sens_scale_b)
         plot.plot("sky_sens_veto_"+self.tag+".png", format='png', dpi=100)
 
         p = healtics.plot_with_ticks(sens_map_sky_isgri * self.sens_scale_b, cmap="YlOrBr", title="",
-                                     overplot=[(target_map_sm, "gist_gray", None), (spimap, "summer", 20),
-                                               (jemxmap, "winter", 20 ** 2), (isgrimap, "autumn", 20 ** 2)],
+                                     overplot=overplot,
                                      unit="$10^{%i} \mathrm{erg^{}cm^{-2} s^{-1}}$" % self.sens_scale_e,
                                      vmin=self.sens_scale_b, vmax=10 * self.sens_scale_b)
         plot.plot("sky_sens_isgri_"+self.tag+".png", format='png', dpi=100)
         
         p = healtics.plot_with_ticks(sens_map_sky_picsit * self.sens_scale_b, cmap="YlOrBr", title="",
-                                     overplot=[(target_map_sm, "gist_gray", None), (spimap, "summer", 20),
-                                               (jemxmap, "winter", 20 ** 2), (isgrimap, "autumn", 20 ** 2)],
+                                     overplot=overplot,
                                      unit="$10^{%i} \mathrm{erg^{}cm^{-2} s^{-1}}$" % self.sens_scale_e,
                                      vmin=self.sens_scale_b, vmax=10 * self.sens_scale_b)
         plot.plot("sky_sens_picsit_"+self.tag+".png", format='png', dpi=100)
         
         p = healtics.plot_with_ticks(bestarea_sky*100, cmap="YlOrBr", title="",
-                                     overplot=[(target_map_sm, "gist_gray", None), (spimap, "summer", 20),
-                                               (jemxmap, "winter", 20 ** 2), (isgrimap, "autumn", 20 ** 2)],
+                                     overplot=overplot,
                                      unit="% of the sky",
                                      vmin=1, vmax=100)
-        plot.plot("sky_sens_picsit_"+self.tag+".png", format='png', dpi=100)
+        plot.plot("sky_sens_locarea_"+self.tag+".png", format='png', dpi=100)
 
         #p=healtics.plot_with_ticks(sens_mp_sky,cmap="jet",title="INTEGRAL SPI-ACS 3 sigma upper limit in 1 second",overplot=[(map_px,"gist_gray",None),(spimap,"summer",20),(jemxmap,"winter",20**2),(isgrimap,"autumn",20**2)],vmin=0,vmax=sens_mp_sky.max())
         #p=healtics.plot_with_ticks(sens_mp_sky,cmap="YlOrBr",title="INTEGRAL SPI-ACS 3 sigma upper limit in 1 second",overplot=[(map_px,"gist_gray",None),(spimap,"summer",20),(jemxmap,"winter",20**2),(isgrimap,"autumn",20**2)],vmin=0,vmax=sens_mp_sky.max())
