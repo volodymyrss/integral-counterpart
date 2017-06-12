@@ -1,6 +1,11 @@
+import sys
+import os
+import string
+import sys
+import gzip
+
 import healpy
-import dataanalysis as da
-from numpy import *
+
 import plot
 import healtics
 import astropy.io.fits as pyfits
@@ -9,39 +14,108 @@ import json
 from astropy.coordinates import SkyCoord, PhysicsSphericalRepresentation
 from astropy import units as u
 
-# from numpy import *
-import numpy as np
-import string
-import sys
-import gzip
+import integralvisibility
 
+import healpy
+
+import integralclient as ic
+
+from dataanalysis import core as da
+
+da.printhook.global_permissive_output=False
+
+import numpy as np
 import integralclient
 
 
 def transform_rmap(rmap):
     nside = healpy.npix2nside(rmap.shape[0])
-    npx = arange(healpy.nside2npix(nside))
+    npx = np.arange(healpy.nside2npix(nside))
     theta, phi = healpy.pix2ang(nside, npx)
     # SkyCoord(phi, theta, 1, unit=(u.rad, u.rad), representation="physicsspherical")
-    ntheta = pi - theta
-    nphi = pi + phi  # + or -???
-    nphi[nphi > pi * 2] -= pi * 2
+    ntheta = np.pi - theta
+    nphi = np.pi + phi  # + or -???
+    nphi[nphi > np.pi * 2] -= np.pi * 2
     return healpy.get_interp_val(rmap, ntheta, nphi)
 
 
 def healpix_fk5_to_galactic(mp):
     nside = healpy.npix2nside(mp.shape[0])
-    theta, phi = healpy.pix2ang(nside, arange(healpy.nside2npix(nside)))
-    ra = phi / pi * 180
-    dec = 90 - theta / pi * 180
+    theta, phi = healpy.pix2ang(nside, np.arange(healpy.nside2npix(nside)))
+    ra = phi / np.pi * 180
+    dec = 90 - theta / np.pi * 180
     coord_galactic_gmap = SkyCoord(ra, dec, unit=(u.deg, u.deg), frame="galactic")
     coord_galactic_map = coord_galactic_gmap.transform_to("fk5")
     return healpy.get_interp_val(mp, coord_galactic_map.ra.degree, coord_galactic_map.dec.degree, lonlat=True)
 
+def grid_for_healpix_map(mp):
+    return healpy.pix2ang(healpy.npix2nside(mp.shape[0]),np.arange(mp.shape[0]),lonlat=True)
+
+
+class LIGOEvent(da.DataAnalysis):
+
+    @property
+    def loc_map(self):
+        if not hasattr(self,'_loc_map'):
+            self._loc_map=healpy.read_map(self.loc_map_path)
+        return self._loc_map
+
+    @property
+    def nside(self):
+        return healpy.npix2nside(self.loc_map.shape[0])
+
+    @property
+    def loc_region(self):
+        indices = np.argsort(-self.loc_map)
+        target_cum_map = np.empty(self.loc_map.shape)
+        target_cum_map[indices] = 100 * np.cumsum(self.loc_map[indices])
+
+        return target_cum_map
+
+    def plot_map(self):
+        healpy.mollview(self.loc_region,title="LIGO/Virgo localization of "+self.gname)
+        healpy.graticule()
+        for tr in np.linspace(0, 360 - 30, (360 / 30)):
+            healpy.projtext(tr - 3, 3, "%i" % tr, lonlat=True)
+
+
+class INTEGRALVisibility(da.DataAnalysis):
+    input_target=LIGOEvent
+
+    minsolarangle=40
+    follow_up_delay=0
+
+    _da_settings=['minsolarangle','follow_up_delay']
+
+    def main(self):
+        ijd0=float(ic.converttime("UTC", self.input_target.trigger_time, "IJD"))
+        ijd=ijd0+self.follow_up_delay
+
+        utc= ic.converttime("IJD", "%.20lg"%ijd, "UTC")
+
+        self.visibility = integralvisibility.Visibility()
+        self.visibility.minsolarangle = self.minsolarangle
+        self.visibility_map = self.visibility.for_time(utc, nsides=self.input_target.nside)
+
+    @property
+    def total_visible(self):
+        return sum(self.input_target.loc_map[self.visibility_map > 0])
+
+    def peak_target_visible(self):
+        ra,dec=grid_for_healpix_map(self.visibility_map)
+
+        i=np.argmax(self.input_target.loc_map)
+        return ra[i],dec[i]
+
+
+    def plot(self):
+        healpy.mollview(self.visibility_map)
+        healpy.graticule()
+
+
 
 class Counterpart(da.DataAnalysis):
-    target_map_fn = None
-    utc = None
+    input_target=LIGOEvent
 
     syst = 0.2
 
@@ -625,3 +699,4 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     Counterpart(use_target_map_fn=args.targetmap, use_utc=args.utc, use_t1=float(args.t1), use_t2=float(args.t2)).get()
+
