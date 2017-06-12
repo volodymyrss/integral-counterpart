@@ -292,8 +292,11 @@ class Sensitivities(da.DataAnalysis):
     def plot_fancy(self):
         p.figure()
 
+        rangemin=dict(hard=1.5,soft=5)
+        rangemax = dict(hard=6, soft=15)
+
         for kind in ['hard','soft']:
-            fig = healtics.plot_with_ticks(self.sens_maps['hard']['best'] / 1e-7,
+            fig = healtics.plot_with_ticks(self.sens_maps[kind]['best'] / 1e-7,
                                            title="INTEGRAL 3-sigma upper limit on " + self.input_target.gname+ "; model "+kind,
                                        overplot=[[(self.input_target.loc_region, "k", 90), (self.input_target.loc_region, "k", 50),
                                                   #(mp, 'g', 0.5),
@@ -304,7 +307,7 @@ class Sensitivities(da.DataAnalysis):
                                                   ]],
                                        # overplot=[(region,"k",10),(healpy.smoothing(region2,0.2),"r",10)],
                                        # ilevels=array([50,10]),
-                                       vmin=1.5, vmax=6, invra=False,
+                                       vmin=rangemin[kind], vmax=rangemax[kind], invra=False,
                                        unit="$10^{-7} \mathrm{erg^{}cm^{-2} s^{-1}}$")
 
     def summarize(self):
