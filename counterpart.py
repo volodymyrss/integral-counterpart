@@ -26,6 +26,10 @@ from dataanalysis import core as da
 import numpy as np
 import integralclient
 
+import healpy
+import healtics
+from matplotlib import pylab as p
+
 
 def transform_rmap(rmap):
     nside = healpy.npix2nside(rmap.shape[0])
@@ -219,14 +223,25 @@ class Responses(da.DataAnalysis):
             print model
 
             for target in ["SPI-ACS", "ISGRI", "IBIS/Veto"]:
-                mp = transform_rmap(np.array(ic.get_response_map(target=rname[target],
-                                                                          lt=lt_byt[rname[target]],
-                                                                          model=model['model'],
-                                                                          epeak=model['epeak'],
-                                                                          alpha=model['alpha'],
-                                                                          emin=40,
-                                                                          emax=40000,
-                                                                          )))
+
+                n_attempts=10
+                while True:
+                    try:
+                        mp = transform_rmap(np.array(ic.get_response_map(target=rname[target],
+                                                                                  lt=lt_byt[rname[target]],
+                                                                                  model=model['model'],
+                                                                                  epeak=model['epeak'],
+                                                                                  alpha=model['alpha'],
+                                                                                  emin=40,
+                                                                                  emax=40000,
+                                                                                  )))
+                    except Exception as e:
+                        print "waiting",e
+                        time.sleep(1)
+                        n_attempts-=1
+                    else:
+                        break
+
                 skymp = CT.sc_map_in_sky(np.array(mp))
                 responses[kind][target] = skymp
 
@@ -236,6 +251,61 @@ class Responses(da.DataAnalysis):
         for kind,v in self.responses.items():
             for instrument,mp in v.items():
                 healpy.mollview(mp,title=kind+" "+instrument)
+
+
+class Sensitivities(da.DataAnalysis):
+    input_assumptions=SourceAssumptions
+    input_target=LIGOEvent
+    input_countlimits=CountLimits
+    input_responses=Responses
+
+    def main(self):
+        sens_maps = {}
+        sens_maps_gal = {}
+
+        theta_lvt, phi_lvt=grid_for_healpix_map(self.input_target.loc_map)
+
+        for kind, model in self.input_assumptions.data['typical_spectra'].items():
+            if kind in self.input_assumptions.duration_by_kind:
+                sens_maps[kind] = {}
+                sens_maps_gal[kind] = {}
+                for target in ["SPI-ACS", "ISGRI", "IBIS/Veto"]:
+                    r = self.input_responses.responses[kind][target] * self.input_countlimits.count_limits[kind][target]
+                    #r[CT.sky_coord.separation(self.input_bodiesbody_coord).degree < bd["body_size"]] = 1e9
+
+                    sens_maps[kind][target] = healpy.get_interp_val(r, theta_lvt, phi_lvt, lonlat=True)
+                    sens_maps_gal[kind][target] = healpix_fk5_to_galactic(sens_maps[kind][target])
+
+                sens_maps[kind]['best'] = np.array([m for k, m in sens_maps[kind].items()]).min(0)
+                sens_maps_gal[kind]['best'] = np.array([m for k, m in sens_maps_gal[kind].items()]).min(0)
+
+        self.sens_maps = sens_maps
+        self.sens_maps_gal = sens_maps_gal
+
+    def plot(self):
+        for kind, v in self.sens_maps.items():
+            for instrument, mp in v.items():
+                healpy.mollview(mp, title=kind + " " + instrument)
+
+
+
+    def plot_fancy(self):
+        p.figure()
+
+        for kind in ['hard','soft']:
+            fig = healtics.plot_with_ticks(self.sens_maps['hard']['best'] / 1e-7,
+                                           title="INTEGRAL 3-sigma upper limit on " + self.input_target.gname+ "; model "+kind,
+                                       overplot=[[(self.input_target.loc_region, "k", 90), (self.input_target.loc_region, "k", 50),
+                                                  #(mp, 'g', 0.5),
+                                                  #   (fermi_shadow,'m',0.5),
+                                                  # (region2,"r",90),(region2,"r",50),
+                                                  # (sens_mcrab,"g",10),
+                                                  #       (GC,"m",0.5),
+                                                  ]],
+                                       # overplot=[(region,"k",10),(healpy.smoothing(region2,0.2),"r",10)],
+                                       # ilevels=array([50,10]),
+                                       vmin=1.5, vmax=6, invra=False,
+                                       unit="$10^{-7} \mathrm{erg^{}cm^{-2} s^{-1}}$")
 
 
 class Counterpart(da.DataAnalysis):
