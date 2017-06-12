@@ -196,6 +196,47 @@ class CountLimits(da.DataAnalysis):
 
         self.count_limits=count_limits
 
+class Responses(da.DataAnalysis):
+    input_assumptions=SourceAssumptions
+    input_target=LIGOEvent
+
+    def main(self):
+        CT = Counterpart()
+        CT.nside = self.input_target.nside
+        CT.utc = self.input_target.trigger_time
+        CT.sc = ic.get_sc(CT.utc)
+        CT.ra = CT.sc['scx']['ra']
+        CT.dec = CT.sc['scx']['dec']
+        CT.compute_transform_grids()
+
+        responses = {}
+
+        rname = {'ISGRI': 'ISGRI', "PICsIT": "PICsIT", "IBIS/Veto": "VETO", "SPI-ACS": "ACS"}
+        lt_byt = dict(ISGRI=30, PICsIT=260, ACS="map2", VETO=100)
+
+        for kind, model in self.input_assumptions.data['typical_spectra'].items():
+            responses[kind] = {}
+            print model
+
+            for target in ["SPI-ACS", "ISGRI", "IBIS/Veto"]:
+                mp = transform_rmap(np.array(ic.get_response_map(target=rname[target],
+                                                                          lt=lt_byt[rname[target]],
+                                                                          model=model['model'],
+                                                                          epeak=model['epeak'],
+                                                                          alpha=model['alpha'],
+                                                                          emin=40,
+                                                                          emax=40000,
+                                                                          )))
+                skymp = CT.sc_map_in_sky(np.array(mp))
+                responses[kind][target] = skymp
+
+        self.responses=responses
+
+    def plot(self):
+        for kind,v in self.responses.items():
+            for instrument,mp in v.items():
+                healpy.mollview(mp,title=kind+" "+instrument)
+
 
 class Counterpart(da.DataAnalysis):
     input_target=LIGOEvent
@@ -232,8 +273,8 @@ class Counterpart(da.DataAnalysis):
             if locerr < 50:
                 if locerr < 0.5:
                     locerr = 0.5
-                self.target_map = array(
-                    exp(-(self.sky_coord.separation(SkyCoord(ra, dec, unit=(u.deg, u.deg))) / u.deg) / locerr ** 2 / 2),
+                self.target_map = np.array(
+                    np.exp(-(self.sky_coord.separation(SkyCoord(ra, dec, unit=(u.deg, u.deg))) / u.deg) / locerr ** 2 / 2),
                     dtype=float)
                 print self.target_map.shape
 
@@ -252,16 +293,16 @@ class Counterpart(da.DataAnalysis):
             model = "compton"
             self.isgri_cl = 1.5
 
-        self.response_mp_acs = transform_rmap(array(
+        self.response_mp_acs = transform_rmap(np.array(
             integralclient.get_response_map(target="ACS", lt='map2', alpha=alpha, epeak=epeak, beta=beta, model=model,
                                             kind="response")))
-        self.response_mp_veto = transform_rmap(array(
+        self.response_mp_veto = transform_rmap(np.array(
             integralclient.get_response_map(target="VETO", lt=100, alpha=alpha, epeak=epeak, beta=beta, model=model,
                                             kind="response")))
-        self.response_mp_isgri = transform_rmap(array(
+        self.response_mp_isgri = transform_rmap(np.array(
             integralclient.get_response_map(target="ISGRI", lt=30, alpha=alpha, epeak=epeak, beta=beta, model=model,
                                             kind="response")))
-        self.response_mp_picsit = transform_rmap(array(
+        self.response_mp_picsit = transform_rmap(np.array(
             integralclient.get_response_map(target="PICsIT", lt=250, alpha=alpha, epeak=epeak, beta=beta, model=model,
                                             kind="response")))
 
@@ -318,9 +359,9 @@ class Counterpart(da.DataAnalysis):
             sens_map[sens_map > sens_map_isgri] = sens_map_isgri[sens_map > sens_map_isgri]
             sens_map[sens_map > sens_map_picsit] = sens_map_picsit[sens_map > sens_map_picsit]
 
-            na = sens_map[~isnan(sens_map) & (sens_map > 0)].min()
+            na = sens_map[~np.isnan(sens_map) & (sens_map > 0)].min()
 
-            na_e = int(log10(na)) - 1
+            na_e = int(np.log10(na)) - 1
             na_b = int(na * 10 / 10 ** na_e) / 10.
 
             ### 
@@ -334,7 +375,7 @@ class Counterpart(da.DataAnalysis):
             na = na_b * 10 ** na_e
 
             print "best ACS", na
-            nv = sens_map_veto[~isnan(sens_map_veto) & (sens_map_veto > 0)].min()
+            nv = sens_map_veto[~np.isnan(sens_map_veto) & (sens_map_veto > 0)].min()
             print "best VETO", nv
             self.sens_scale = na_b * 10 ** na_e
             sens_map /= self.sens_scale
@@ -376,11 +417,11 @@ class Counterpart(da.DataAnalysis):
         print "will localize with", [n for (c, ce, br), m, n in alldet]
 
         total_region = []
-        c_vec = array([c for (c, ce, br), m, n in alldet])
-        ce_vec = array([ce for (c, ce, br), m, n in alldet])
+        c_vec = np.array([c for (c, ce, br), m, n in alldet])
+        ce_vec = np.array([ce for (c, ce, br), m, n in alldet])
         # ce_vec=(ce_vec**2+(c_vec*0.05)**2)**0.5
 
-        response_mt = array([m for ((c, ce, br), m, n) in alldet])
+        response_mt = np.array([m for ((c, ce, br), m, n) in alldet])
         print response_mt.shape
 
         nc_mt = np.outer(c_vec, np.ones(response_mt.shape[1])) * response_mt
@@ -388,7 +429,7 @@ class Counterpart(da.DataAnalysis):
 
         mean_map = sum(nc_mt / nce_mt ** 2, axis=0) / sum(1. / nce_mt ** 2, axis=0)
         err_map = 1 / sum(1. / nce_mt ** 2, axis=0) ** 0.5
-        chi2_map = sum((nc_mt - outer(ones_like(c_vec), mean_map)) ** 2 / nce_mt ** 2, axis=0)
+        chi2_map = sum((nc_mt - np.outer(np.ones_like(c_vec), mean_map)) ** 2 / nce_mt ** 2, axis=0)
 
         min_px = chi2_map.argmin()
         print "minimum prediction", response_mt[:, min_px], mean_map[min_px] / response_mt[:, min_px], chi2_map[min_px]
@@ -415,7 +456,7 @@ class Counterpart(da.DataAnalysis):
 
         #         (self.isgri_counts,self.response_mp_isgri,"ISGRI"),
 
-        total_region = ones_like(self.response_mp_acs, dtype=bool)
+        total_region = np.ones_like(self.response_mp_acs, dtype=bool)
         for i1, ((c1, ce1, br1), m1, n1) in enumerate(alldet):
             for i2, ((c2, ce2, br2), m2, n2) in enumerate(alldet):
                 if c1 == 0 or c2 == 0: continue  # ???
@@ -423,11 +464,11 @@ class Counterpart(da.DataAnalysis):
                 if br1 == 0 or br2 == 0: continue
                 if i2 >= i1: continue
 
-                ang0 = arctan2(m2, m1)  # inversed for responose
-                h0 = histogram(ang0.flatten(), 100)
+                ang0 = np.arctan2(m2, m1)  # inversed for responose
+                h0 = np.histogram(ang0.flatten(), 100)
 
-                ang1 = arctan2((c1 - ce1) * (1 - self.syst), (c2 + ce2) * (1 + self.syst))
-                ang2 = arctan2((c1 + ce1) * (1 + self.syst), (c2 - ce2) * (1 - self.syst))
+                ang1 = np.arctan2((c1 - ce1) * (1 - self.syst), (c2 + ce2) * (1 + self.syst))
+                ang2 = np.arctan2((c1 + ce1) * (1 + self.syst), (c2 - ce2) * (1 - self.syst))
 
                 print(n1, ":", c1, ce1, "; ", n2, c2, ce2, " => ", ang1, ang2, " while ", ang0.min(), ang0.max())
 
@@ -481,31 +522,31 @@ class Counterpart(da.DataAnalysis):
                 # m1=m1/sig_map_acs*sig_map_acs.max()
                 # m2=m1/sig_map_acs*sig_map_acs.max()
 
-                ang0 = arctan2(m1, m2)
-                h0 = histogram(ang0.flatten(), 100)
-                ang1 = arctan2((m1 - 1) * (1 - syst), (m2 + 1) * (1 + syst))
-                ang2 = arctan2((m1 + 1) * (1 + syst), (m2 - 1) * (1 - syst))
+                ang0 = np.arctan2(m1, m2)
+                h0 = np.histogram(ang0.flatten(), 100)
+                ang1 = np.arctan2((m1 - 1) * (1 - syst), (m2 + 1) * (1 + syst))
+                ang2 = np.arctan2((m1 + 1) * (1 + syst), (m2 - 1) * (1 - syst))
 
                 areas = [sum((ang0[i] > ang1) & (ang0[i] < ang2)) for i in range(ang0.shape[0])]
 
-                area = (array(areas) * healpy.nside2pixarea(16))
-                area /= 4 * pi
+                area = (np.array(areas) * healpy.nside2pixarea(16))
+                area /= 4 * np.pi
 
                 allmaps.append(area)
 
-        bestarea = array(allmaps).min(0)
+        bestarea = np.array(allmaps).min(0)
         healpy.mollview(bestarea)
         self.bestarea = bestarea
         plot.plot("bestlocalization.png")
 
         plot.p.figure()
-        plot.p.a = plot.p.hist(bestarea, logspace(-5, -0.5, 100), log=True)
+        plot.p.a = plot.p.hist(bestarea, np.logspace(-5, -0.5, 100), log=True)
         plot.p.semilogx()
         plot.plot("bestlocalization_hist.png")
 
     def get_grid(self, nside=None):
         nside = nside if nside is not None else self.nside
-        npx = arange(healpy.nside2npix(nside))
+        npx = np.arange(healpy.nside2npix(nside))
         theta, phi = healpy.pix2ang(nside, npx)
         return SkyCoord(phi, theta, 1, unit=(u.rad, u.rad), representation="physicsspherical")
 
@@ -542,9 +583,9 @@ class Counterpart(da.DataAnalysis):
         z_inxy /= r_inxy
 
         sc_in_sky = SkyCoord(
-            arctan2(x_inxy * self.scy.cartesian.x + y_inxy * self.scy.cartesian.y + z_inxy * self.scy.cartesian.z,
+            np.arctan2(x_inxy * self.scy.cartesian.x + y_inxy * self.scy.cartesian.y + z_inxy * self.scy.cartesian.z,
                     x_inxy * self.scx.cartesian.x + y_inxy * self.scx.cartesian.y + z_inxy * self.scx.cartesian.z),
-            arccos(on_scz),
+            np.arccos(on_scz),
             1,
             unit=(u.rad, u.rad),
             representation="physicsspherical")
@@ -583,15 +624,15 @@ class Counterpart(da.DataAnalysis):
 
         plot.plot()
 
-        sens_map_sky = healpy.sphtfunc.smoothing(self.sc_map_in_sky(self.sens_map), 5. / 180. * pi)
-        sens_map_sky_acs = healpy.sphtfunc.smoothing(self.sc_map_in_sky(self.sens_map_acs), 5. / 180. * pi)
-        sens_map_sky_veto = healpy.sphtfunc.smoothing(self.sc_map_in_sky(self.sens_map_veto), 5. / 180. * pi)
-        sens_map_sky_isgri = healpy.sphtfunc.smoothing(self.sc_map_in_sky(self.sens_map_isgri), 5. / 180. * pi)
-        sens_map_sky_picsit = healpy.sphtfunc.smoothing(self.sc_map_in_sky(self.sens_map_picsit), 5. / 180. * pi)
+        sens_map_sky = healpy.sphtfunc.smoothing(self.sc_map_in_sky(self.sens_map), 5. / 180. * np.pi)
+        sens_map_sky_acs = healpy.sphtfunc.smoothing(self.sc_map_in_sky(self.sens_map_acs), 5. / 180. * np.pi)
+        sens_map_sky_veto = healpy.sphtfunc.smoothing(self.sc_map_in_sky(self.sens_map_veto), 5. / 180. * np.pi)
+        sens_map_sky_isgri = healpy.sphtfunc.smoothing(self.sc_map_in_sky(self.sens_map_isgri), 5. / 180. * np.pi)
+        sens_map_sky_picsit = healpy.sphtfunc.smoothing(self.sc_map_in_sky(self.sens_map_picsit), 5. / 180. * np.pi)
 
         if self.do_burst_analysis:
-            bestarea_sky = healpy.sphtfunc.smoothing(self.sc_map_in_sky(self.bestarea), 5. / 180. * pi)
-            locmap_sky = healpy.sphtfunc.smoothing(self.sc_map_in_sky(self.locmap), 5. / 180. * pi)
+            bestarea_sky = healpy.sphtfunc.smoothing(self.sc_map_in_sky(self.bestarea), 5. / 180. * np.pi)
+            locmap_sky = healpy.sphtfunc.smoothing(self.sc_map_in_sky(self.locmap), 5. / 180. * np.pi)
 
         good_mask = lambda x: sens_map_sky < sens_map_sky.min() * x
         print "good for", [sum(self.target_map[good_mask(x)]) for x in [1.01, 1.1, 1.2, 1.5, 2.]]
@@ -607,23 +648,23 @@ class Counterpart(da.DataAnalysis):
 
         # overplot=[]
         try:
-            o_isgrimap = loadtxt(gzip.open("isgri_sens.txt.gz"))
-            o_isgrimap[isnan(o_isgrimap) | isinf(o_isgrimap)] = 0
+            o_isgrimap = np.loadtxt(gzip.open("isgri_sens.txt.gz"))
+            o_isgrimap[np.isnan(o_isgrimap) | np.isinf(o_isgrimap)] = 0
 
             isgrimap = healpy.get_interp_val(o_isgrimap,
                                              self.sky_coord.represent_as("physicsspherical").theta.rad,
                                              self.sky_coord.represent_as("physicsspherical").phi.rad,
                                              )
 
-            o_jemxmap = loadtxt(gzip.open("jemx_sens.txt.gz"))
-            o_jemxmap[isnan(o_jemxmap) | isinf(o_jemxmap)] = 0
+            o_jemxmap = np.loadtxt(gzip.open("jemx_sens.txt.gz"))
+            o_jemxmap[np.isnan(o_jemxmap) | np.isinf(o_jemxmap)] = 0
             jemxmap = healpy.get_interp_val(o_jemxmap,
                                             self.sky_coord.represent_as("physicsspherical").theta.rad,
                                             self.sky_coord.represent_as("physicsspherical").phi.rad,
                                             )
 
-            o_spimap = loadtxt(gzip.open("spi_sens.txt.gz"))
-            o_spimap[isnan(o_spimap) | isinf(o_spimap)] = 0
+            o_spimap = np.loadtxt(gzip.open("spi_sens.txt.gz"))
+            o_spimap[np.isnan(o_spimap) | np.isinf(o_spimap)] = 0
             spimap = healpy.get_interp_val(o_spimap,
                                            self.sky_coord.represent_as("physicsspherical").theta.rad,
                                            self.sky_coord.represent_as("physicsspherical").phi.rad,
@@ -637,13 +678,13 @@ class Counterpart(da.DataAnalysis):
                 bestsens = min(o_detmap[o_detmap > 5.9e-6 ** 2])
                 print "min", bestsens, bestsens ** 0.5
                 cover = (detmap < bestsens * 20 ** 2) & (detmap > 0)
-                print "contained in", detname, "area", sum(cover) / float(cover.shape[0]) * 4 * pi * (
-                                                                                                         180 / pi) ** 2, self.target_map.sum(), \
+                print "contained in", detname, "area", sum(cover) / float(cover.shape[0]) * 4 * np.pi * (
+                                                                                                         180 / np.pi) ** 2, self.target_map.sum(), \
                     self.target_map[cover].sum(), sum(cover) * 1. / cover.shape[0], sum(cover) * 1. / cover.shape[
-                    0] * 4 * pi * (180 / pi) ** 2
+                    0] * 4 * np.pi * (180 / np.pi) ** 2
 
                 cover_info[detname] = dict(
-                    area_deg2=sum(cover) / float(cover.shape[0]) * 4 * pi * (180 / pi) ** 2,
+                    area_deg2=sum(cover) / float(cover.shape[0]) * 4 * np.pi * (180 / np.pi) ** 2,
                     target_coverage=self.target_map[cover].sum()
                 )
 

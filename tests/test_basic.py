@@ -62,3 +62,18 @@ def test_count_limits():
 
     cl=ct.CountLimits().get()
     print cl.count_limits
+
+def test_responses():
+    import dataanalysis
+    debug_output()
+
+    import counterpart as ct
+
+    le = ct.LIGOEvent(
+        use_trigger_time="2017-06-08T02:01:16.492188",
+        use_gname="G288732",
+        use_loc_map_path="/home/savchenk/work/ligo/lvt170608/bayestar.fits"
+    ).get()
+
+    cl=ct.Responses().get()
+    print cl.responses
