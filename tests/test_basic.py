@@ -47,3 +47,18 @@ def test_visibility():
     assert abs(iv.total_visible - 0.566222565777) < 1e-5
 
     assert iv.peak_target_visible() == (110.56640625, 9.3671571526015782)
+
+def test_count_limits():
+    import dataanalysis
+    debug_output()
+
+    import counterpart as ct
+
+    le = ct.LIGOEvent(
+        use_trigger_time="2017-06-08T02:01:16.492188",
+        use_gname="G288732",
+        use_loc_map_path="/home/savchenk/work/ligo/lvt170608/bayestar.fits"
+    ).get()
+
+    cl=ct.CountLimits().get()
+    print cl.count_limits

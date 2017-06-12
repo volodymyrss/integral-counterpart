@@ -3,6 +3,7 @@ import os
 import string
 import sys
 import gzip
+import time
 
 import healpy
 
@@ -21,8 +22,6 @@ import healpy
 import integralclient as ic
 
 from dataanalysis import core as da
-
-da.printhook.global_permissive_output=False
 
 import numpy as np
 import integralclient
@@ -112,6 +111,90 @@ class INTEGRALVisibility(da.DataAnalysis):
         healpy.mollview(self.visibility_map)
         healpy.graticule()
 
+class SourceAssumptions(da.DataAnalysis):
+
+    def main(self):
+        data = {}
+        data.update(dict(
+            byinstrument={},
+            instruments=["JEM-X", "ISGRI", "PICsIT", "SPI", "SPI-ACS", "IBIS/Veto"],
+            zones=["fov", "z1", "z2", "z3"],
+            typical_spectra=dict(
+                hard=dict(model="compton", alpha=-0.5, epeak=600, beta=-9, ampl=1),
+                soft=dict(model="band", alpha=-1, epeak=300, beta=-2.5, ampl=1),
+                crabby=dict(model="powerlaw", alpha=-2, epeak=300, beta=-2.5, ampl=1),
+            )
+        ))
+
+        data['byinstrument']['JEM-X'] = dict(emin=3, emax=30, fov_area=130, angres="3'", zones=["fov", "onaxis"])
+        data['byinstrument']['ISGRI'] = dict(emin=20, emax=200, fov_area=900, angres="12'", zones=["fov", "onaxis", "z1"])
+        data['byinstrument']['PICsIT'] = dict(emin=260, emax=8000, fov_area=900, angres="30'",
+                                              zones=["fov", "onaxis", "z1"])
+        data['byinstrument']['SPI'] = dict(emin=25, emax=8000, fov_area=1225, angres="2.5$^\circ$", zones=["fov", "onaxis"])
+        data['byinstrument']['SPI-ACS'] = dict(emin=75, emax=100000, fov_area=None, angres=None,
+                                               zones=["fov", "onaxis", "z1", "z2", "z3"])
+        data['byinstrument']['IBIS/Veto'] = dict(emin=100, emax=100000, fov_area=None, angres=None,
+                                                 zones=["fov", "onaxis", "z1", "z2", "z3"])
+        # data['instruments']['Compton']=dict(emin=260,emax=800)
+
+        data['byinstrument']['JEM-X']['erange_ag'] = dict(emin=3, emax=30)
+        data['byinstrument']['ISGRI']['erange_ag'] = dict(emin=20, emax=200)
+        data['byinstrument']['PICsIT']['erange_ag'] = dict(emin=260, emax=2600)
+        data['byinstrument']['SPI']['erange_ag'] = dict(emin=25, emax=1000)
+
+        data['byinstrument']['SPI-ACS']['erange_grb'] = dict(emin=75, emax=2000)
+        data['byinstrument']['IBIS/Veto']['erange_grb'] = dict(emin=100, emax=2000)
+        data['byinstrument']['JEM-X']['erange_grb'] = dict(emin=3, emax=30)
+        data['byinstrument']['ISGRI']['erange_grb'] = dict(emin=20, emax=200)
+        data['byinstrument']['PICsIT']['erange_grb'] = dict(emin=260, emax=2600)
+        data['byinstrument']['SPI']['erange_grb'] = dict(emin=25, emax=8000)
+
+        self.data=data
+        self.duration_by_kind = dict(hard=1, soft=8)
+
+
+class CountLimits(da.DataAnalysis):
+    input_target=LIGOEvent
+    input_assumptions=SourceAssumptions
+
+
+    def get_count_limit(self,target, scale, nsig=None):
+
+        n_attempts=10
+        while n_attempts>=0:
+            try:
+                hk = ic.get_hk(
+                                target=target,
+                                utc=self.input_target.trigger_time,
+                                span=600, t1=0, t2=0, ra=0, dec=0, rebin=scale,
+                                vetofiltermargin=0.03
+                            )['lc']
+            except ic.ServiceException as e:
+                print "waiting...",e
+                time.sleep(1)
+                n_attempts-=1
+
+            else:
+                break
+        if n_attempts<0:
+            raise Exception("unable to reach the server in %i attempts!"%n_attempts)
+
+
+        print target, ":", scale, hk
+        return hk['count limit 3 sigma']
+
+    def main(self):
+
+        hkname = {'ISGRI': 'ISGRI', "PICsIT": "SPTI234", "IBIS/Veto": "IBIS_VETO", "SPI-ACS": "ACS"}
+
+        count_limits = {}
+        for kind, model in self.input_assumptions.data['typical_spectra'].items():
+            if kind in self.input_assumptions.duration_by_kind:
+                count_limits[kind] = {}
+                for target in ["SPI-ACS", "ISGRI", "IBIS/Veto"]:
+                    count_limits[kind][target] = self.get_count_limit(hkname[target], scale=self.input_assumptions.duration_by_kind[kind])
+
+        self.count_limits=count_limits
 
 
 class Counterpart(da.DataAnalysis):
