@@ -307,6 +307,17 @@ class Sensitivities(da.DataAnalysis):
                                        vmin=1.5, vmax=6, invra=False,
                                        unit="$10^{-7} \mathrm{erg^{}cm^{-2} s^{-1}}$")
 
+    def summarize(self):
+        lvt = self.input_target.loc_region
+        lvt_prob = self.input_target.loc_map
+
+        for kind in "hard","soft":
+            mp=self.sens_maps[kind]['best']
+            print "model", kind, "sensitivity extreme from",mp[lvt<90].min(),"to",mp[lvt<90].max()
+            print "model", kind, "sensitivity within 50% of best contains",sum(lvt_prob[mp<1.5*mp[lvt<90].min()])
+
+
+
 
 class Counterpart(da.DataAnalysis):
     input_target=LIGOEvent
