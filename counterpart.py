@@ -1,9 +1,13 @@
+from __future__ import print_function
+
 import sys
 import os
 import string
 import sys
 import gzip
 import time
+
+from scipy.stats import norm
 
 import healpy
 
@@ -51,6 +55,16 @@ def healpix_fk5_to_galactic(mp):
     coord_galactic_map = coord_galactic_gmap.transform_to("fk5")
     return healpy.get_interp_val(mp, coord_galactic_map.ra.degree, coord_galactic_map.dec.degree, lonlat=True)
 
+def healpix_galactic_to_fk5(mp):
+    nside = healpy.npix2nside(mp.shape[0])
+    theta, phi = healpy.pix2ang(nside, np.arange(healpy.nside2npix(nside)))
+    ra = phi / np.pi * 180
+    dec = 90 - theta / np.pi * 180
+    coord_galactic_gmap = SkyCoord(ra, dec, unit=(u.deg, u.deg), frame="fk5")
+    coord_galactic_map = coord_galactic_gmap.transform_to("galactic")
+    return healpy.get_interp_val(mp, coord_galactic_map.l.degree, coord_galactic_map.b.degree, lonlat=True)
+
+
 def grid_for_healpix_map(mp):
     return healpy.pix2ang(healpy.npix2nside(mp.shape[0]),np.arange(mp.shape[0]),lonlat=True)
 
@@ -82,8 +96,84 @@ class LIGOEvent(da.DataAnalysis):
             healpy.projtext(tr - 3, 3, "%i" % tr, lonlat=True)
 
 
+class IceCubeEvent(da.DataAnalysis):
+    nside=128
+
+    ic_name="unnamed"
+
+    @property
+    def gname(self):
+        return self.ic_name
+
+    def get_version(self):
+        return self.get_signature()+"."+self.version+"."+self.ic_name
+
+    def get_ra_dec(self):
+        npx = np.arange(healpy.nside2npix(self.nside))
+        return healpy.pix2ang(self.nside, npx, lonlat=True)
+
+    @property
+    def loc_map(self):
+        if not hasattr(self,'_loc_map'):
+            #self._loc_map=np.zeros(healpy.nside2npix(self.nside))
+
+            ra,dec = self.get_ra_dec()
+
+            p50_to_1sigma=1/norm.isf((1 - .50) / 2)/2
+
+
+            dist_ra=(ra - self.loc_parameters['ra'])
+            dist_ra[abs(dist_ra)>180]-=360
+
+            self._loc_map=np.exp(
+                -0.5*(dist_ra/(p50_to_1sigma*np.mean(map(abs,self.loc_parameters['dra_p50']))))**2 \
+                -0.5*((dec - self.loc_parameters['dec']) / (p50_to_1sigma*np.mean(map(abs, self.loc_parameters['ddec_p50']))))**2
+            )
+
+            self._loc_map/=sum(self._loc_map)
+
+        return self._loc_map
+
+    @property
+    def loc_region(self):
+        indices = np.argsort(-self.loc_map)
+        target_cum_map = np.empty(self.loc_map.shape)
+        target_cum_map[indices] = 100 * np.cumsum(self.loc_map[indices])
+
+        return target_cum_map
+
+    def plot_map(self):
+        healpy.mollview(self.loc_region,title="IceCube localization of "+self.gname)
+        healpy.graticule()
+        for tr in np.linspace(0, 360 - 30, (360 / 30)):
+            healpy.projtext(tr - 3, 3, "%i" % tr, lonlat=True)
+
+    def describe_loc_regions(self):
+        ra, dec= self.get_ra_dec()
+
+        i_peak=self.loc_region.argmin()
+
+        print("peak",ra[i_peak],dec[i_peak])
+
+        for limit in 50, 90:
+            m = self.loc_region < limit
+            print(limit,"% containment")
+            print("  RA",round(ra[i_peak]-ra[m].min(),2),'..',round(ra[m].max()-ra[i_peak],2),)
+            print("  RA", round(ra[m].min(), 2), '..', round(ra[m].max(), 2), )
+            print("  Dec", round(dec[i_peak] - dec[m].min(), 2), '..', round(dec[m].max() - dec[i_peak], 2), )
+            print("  Dec", round(dec[m].min(), 2), '..', round(dec[m].max(), 2), )
+
+
+class Event(da.DataAnalysis):
+    run_for_hashe=True
+
+    event_kind=LIGOEvent
+
+    def main(self):
+        return self.event_kind
+
 class INTEGRALVisibility(da.DataAnalysis):
-    input_target=LIGOEvent
+    input_target=Event
 
     minsolarangle=40
     follow_up_delay=0
@@ -158,7 +248,7 @@ class SourceAssumptions(da.DataAnalysis):
 
 
 class CountLimits(da.DataAnalysis):
-    input_target=LIGOEvent
+    input_target=Event
     input_assumptions=SourceAssumptions
 
 
@@ -174,7 +264,7 @@ class CountLimits(da.DataAnalysis):
                                 vetofiltermargin=0.03
                             )['lc']
             except ic.ServiceException as e:
-                print "waiting...",e
+                print("waiting...",e)
                 time.sleep(1)
                 n_attempts-=1
 
@@ -184,7 +274,7 @@ class CountLimits(da.DataAnalysis):
             raise Exception("unable to reach the server in %i attempts!"%n_attempts)
 
 
-        print target, ":", scale, hk
+        print(target, ":", scale, hk)
         return hk['count limit 3 sigma']
 
     def main(self):
@@ -202,7 +292,7 @@ class CountLimits(da.DataAnalysis):
 
 class Responses(da.DataAnalysis):
     input_assumptions=SourceAssumptions
-    input_target=LIGOEvent
+    input_target=Event
 
     def main(self):
         CT = Counterpart()
@@ -220,7 +310,7 @@ class Responses(da.DataAnalysis):
 
         for kind, model in self.input_assumptions.data['typical_spectra'].items():
             responses[kind] = {}
-            print model
+            print(model)
 
             for target in ["SPI-ACS", "ISGRI", "IBIS/Veto"]:
 
@@ -236,7 +326,7 @@ class Responses(da.DataAnalysis):
                                                                                   emax=40000,
                                                                                   )))
                     except Exception as e:
-                        print "waiting",e
+                        print("waiting",e)
                         time.sleep(1)
                         n_attempts-=1
                     else:
@@ -255,7 +345,7 @@ class Responses(da.DataAnalysis):
 
 class Sensitivities(da.DataAnalysis):
     input_assumptions=SourceAssumptions
-    input_target=LIGOEvent
+    input_target=Event
     input_countlimits=CountLimits
     input_responses=Responses
 
@@ -316,14 +406,14 @@ class Sensitivities(da.DataAnalysis):
 
         for kind in "hard","soft":
             mp=self.sens_maps[kind]['best']
-            print "model", kind, "sensitivity extreme from",mp[lvt<90].min(),"to",mp[lvt<90].max()
-            print "model", kind, "sensitivity within 50% of best contains",sum(lvt_prob[mp<1.5*mp[lvt<90].min()])
+            print("model", kind, "sensitivity extreme from",mp[lvt<90].min(),"to",mp[lvt<90].max())
+            print("model", kind, "sensitivity within 50% of best contains",sum(lvt_prob[mp<1.5*mp[lvt<90].min()]))
 
 
 
 
 class Counterpart(da.DataAnalysis):
-    input_target=LIGOEvent
+    input_target=Event
 
     syst = 0.2
 
@@ -333,7 +423,7 @@ class Counterpart(da.DataAnalysis):
     do_burst_analysis = False
 
     def main(self):
-        print self.utc
+        print(self.utc)
 
         self.sc = integralclient.get_sc(self.utc, ra=0, dec=0)
 
@@ -360,7 +450,7 @@ class Counterpart(da.DataAnalysis):
                 self.target_map = np.array(
                     np.exp(-(self.sky_coord.separation(SkyCoord(ra, dec, unit=(u.deg, u.deg))) / u.deg) / locerr ** 2 / 2),
                     dtype=float)
-                print self.target_map.shape
+                print(self.target_map.shape)
 
         if False:
             scales = [8]
@@ -390,7 +480,7 @@ class Counterpart(da.DataAnalysis):
             integralclient.get_response_map(target="PICsIT", lt=250, alpha=alpha, epeak=epeak, beta=beta, model=model,
                                             kind="response")))
 
-        print "best response ACS, Veto, ISGRI", self.response_mp_acs.min(), self.response_mp_veto.min(), self.response_mp_isgri.min()
+        print("best response ACS, Veto, ISGRI", self.response_mp_acs.min(), self.response_mp_veto.min(), self.response_mp_isgri.min())
 
         def get_count_limit(target, scale):
 
@@ -398,9 +488,9 @@ class Counterpart(da.DataAnalysis):
                 r = integralclient.get_hk(target=target, utc=self.utc, span=30.01, t1=0, t2=0, ra=0, dec=0, rebin=scale)
                 hk = r.json()['lc']
             except Exception as e:
-                print e, r.content
+                print(e, r.content)
 
-            print target, ":", scale, hk
+            print(target, ":", scale, hk)
             return hk['std bkg'] * (3 + hk['maxsig']) * hk['timebin']
 
         if self.do_burst_analysis:
@@ -408,7 +498,7 @@ class Counterpart(da.DataAnalysis):
                 span = (self.t2 - self.t1) * 2. + 100
                 hk = integralclient.get_hk(target=target, utc=self.utc, span=span, t1=self.t1, t2=self.t2, ra=0, dec=0,
                                            rebin=0)['lc']
-                print target, ":", hk
+                print(target, ":", hk)
                 return hk['burst counts'], hk['burst counts error'], hk['burst region']
 
             self.acs_counts = get_burst_counts("ACS")
@@ -430,7 +520,7 @@ class Counterpart(da.DataAnalysis):
             # isgri_lim=300
 
 
-            print "ACS, Veto, ISGRI", acs_lim, veto_lim, isgri_lim
+            print("ACS, Veto, ISGRI", acs_lim, veto_lim, isgri_lim)
 
             self.syst = 0.
 
@@ -458,9 +548,9 @@ class Counterpart(da.DataAnalysis):
 
             na = na_b * 10 ** na_e
 
-            print "best ACS", na
+            print("best ACS", na)
             nv = sens_map_veto[~np.isnan(sens_map_veto) & (sens_map_veto > 0)].min()
-            print "best VETO", nv
+            print("best VETO", nv)
             self.sens_scale = na_b * 10 ** na_e
             sens_map /= self.sens_scale
             sens_map_veto /= self.sens_scale
@@ -498,7 +588,7 @@ class Counterpart(da.DataAnalysis):
                   c != 0
                   ]
 
-        print "will localize with", [n for (c, ce, br), m, n in alldet]
+        print("will localize with", [n for (c, ce, br), m, n in alldet])
 
         total_region = []
         c_vec = np.array([c for (c, ce, br), m, n in alldet])
@@ -506,7 +596,7 @@ class Counterpart(da.DataAnalysis):
         # ce_vec=(ce_vec**2+(c_vec*0.05)**2)**0.5
 
         response_mt = np.array([m for ((c, ce, br), m, n) in alldet])
-        print response_mt.shape
+        print(response_mt.shape)
 
         nc_mt = np.outer(c_vec, np.ones(response_mt.shape[1])) * response_mt
         nce_mt = np.outer(ce_vec, np.ones(response_mt.shape[1])) * response_mt
@@ -516,17 +606,17 @@ class Counterpart(da.DataAnalysis):
         chi2_map = sum((nc_mt - np.outer(np.ones_like(c_vec), mean_map)) ** 2 / nce_mt ** 2, axis=0)
 
         min_px = chi2_map.argmin()
-        print "minimum prediction", response_mt[:, min_px], mean_map[min_px] / response_mt[:, min_px], chi2_map[min_px]
-        print "measure", c_vec
-        print "measure err", ce_vec
-        print "sig", (c - mean_map[min_px] * response_mt[:, min_px]) / ce_vec
+        print("minimum prediction", response_mt[:, min_px], mean_map[min_px] / response_mt[:, min_px], chi2_map[min_px])
+        print("measure", c_vec)
+        print("measure err", ce_vec)
+        print("sig", (c - mean_map[min_px] * response_mt[:, min_px]) / ce_vec)
 
         healpy.mollview(chi2_map)
         plot.plot("chi2_map.png")
 
         self.locmap = chi2_map / chi2_map.min()
 
-        print self.locmap.min(), self.locmap.max()
+        print(self.locmap.min(), self.locmap.max())
 
         healpy.mollview(mean_map)
         plot.plot("mean_map.png")
@@ -571,7 +661,7 @@ class Counterpart(da.DataAnalysis):
 
         fluence = self.sens_map_acs.min() * 10
 
-        print "fluence for 10 sigma in ACS:", fluence
+        print("fluence for 10 sigma in ACS:", fluence)
 
         sig_map_acs = fluence / self.sens_map_acs
         sig_map_veto = fluence / self.sens_map_veto
@@ -719,12 +809,12 @@ class Counterpart(da.DataAnalysis):
             locmap_sky = healpy.sphtfunc.smoothing(self.sc_map_in_sky(self.locmap), 5. / 180. * np.pi)
 
         good_mask = lambda x: sens_map_sky < sens_map_sky.min() * x
-        print "good for", [sum(self.target_map[good_mask(x)]) for x in [1.01, 1.1, 1.2, 1.5, 2.]]
+        print("good for", [sum(self.target_map[good_mask(x)]) for x in [1.01, 1.1, 1.2, 1.5, 2.]])
 
-        print "very good", sens_map_sky.min()
-        print "typical bad", sum(self.target_map[~good_mask(1.2)] * sens_map_sky[~good_mask(1.2)]) / sum(
+        print("very good", sens_map_sky.min())
+        print("typical bad", sum(self.target_map[~good_mask(1.2)] * sens_map_sky[~good_mask(1.2)]) / sum(),
             self.target_map[~good_mask(1.2)])
-        print "typical good", sum(self.target_map[good_mask(1.2)] * sens_map_sky[good_mask(1.2)]) / sum(
+        print("typical good", sum(self.target_map[good_mask(1.2)] * sens_map_sky[good_mask(1.2)]) / sum(),
             self.target_map[good_mask(1.2)])
 
         # map_sc=healpy.sphtfunc.smoothing(map_sc,5./180.*pi)
@@ -760,12 +850,11 @@ class Counterpart(da.DataAnalysis):
                                               ("jemx", jemxmap, o_jemxmap),
                                               ("spi", spimap ** 2, o_spimap ** 2)]:
                 bestsens = min(o_detmap[o_detmap > 5.9e-6 ** 2])
-                print "min", bestsens, bestsens ** 0.5
+                print("min", bestsens, bestsens ** 0.5)
                 cover = (detmap < bestsens * 20 ** 2) & (detmap > 0)
-                print "contained in", detname, "area", sum(cover) / float(cover.shape[0]) * 4 * np.pi * (
-                                                                                                         180 / np.pi) ** 2, self.target_map.sum(), \
+                print("contained in", detname, "area", sum(cover) / float(cover.shape[0]) * 4 * np.pi * (180 / np.pi) ** 2, self.target_map.sum(), \
                     self.target_map[cover].sum(), sum(cover) * 1. / cover.shape[0], sum(cover) * 1. / cover.shape[
-                    0] * 4 * np.pi * (180 / np.pi) ** 2
+                    0] * 4 * np.pi * (180 / np.pi) ** 2)
 
                 cover_info[detname] = dict(
                     area_deg2=sum(cover) / float(cover.shape[0]) * 4 * np.pi * (180 / np.pi) ** 2,
@@ -787,13 +876,13 @@ class Counterpart(da.DataAnalysis):
 
 
                 # cover=theta_sc_rad>120./180*pi
-                # print "contained in >120",map_px[cover].sum(),sum(cover)*1./cover.shape[0],sum(cover)*1./cover.shape[0]*4*pi*(180/pi)**2
+                # print("contained in >120",map_px[cover].sum(),sum(cover)*1./cover.shape[0],sum(cover)*1./cover.shape[0]*4*pi*(180/pi)**2)
 
                 # cover=(theta_sc_rad>80./180*pi) & (theta_sc_rad<120./180*pi)
-                # print "contained in 80-120",map_px[cover].sum(),sum(cover)*1./cover.shape[0],sum(cover)*1./cover.shape[0]*4*pi*(180/pi)**2
+                # print("contained in 80-120",map_px[cover].sum(),sum(cover)*1./cover.shape[0],sum(cover)*1./cover.shape[0]*4*pi*(180/pi)**2)
 
                 # cover=(theta_sc_rad<80./180*pi)
-                # print "contained in <80",map_px[cover].sum(),sum(cover)*1./cover.shape[0],sum(cover)*1./cover.shape[0]*4*pi*(180/pi)**2
+                # print("contained in <80",map_px[cover].sum(),sum(cover)*1./cover.shape[0],sum(cover)*1./cover.shape[0]*4*pi*(180/pi)**2)
                 #       sens_mp_sky[]*=2
 
         for body_name in "earth", "moon", "sun":
