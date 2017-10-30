@@ -256,7 +256,7 @@ class IceCubeEvent(DataAnalysis):
         return self.event_time['utc']
 
     def get_version(self):
-        return self.get_signature()+"."+self.version+"."+self.ic_name+"."+self.trigger_time
+        return self.get_signature()+"."+self.version+"."+self.ic_name #+"."+self.trigger_time
 
     def get_ra_dec(self):
         npx = np.arange(healpy.nside2npix(self.nside))
@@ -357,6 +357,8 @@ class INTEGRALVisibility(DataAnalysis):
 
 class SourceAssumptions(DataAnalysis):
 
+    version="v2"
+
     def main(self):
         data = {}
         data.update(dict(
@@ -366,7 +368,9 @@ class SourceAssumptions(DataAnalysis):
             typical_spectra=dict(
                 hard=dict(model="compton", alpha=-0.5, epeak=600, beta=-9, ampl=1),
                 soft=dict(model="band", alpha=-1, epeak=300, beta=-2.5, ampl=1),
-                crabby=dict(model="powerlaw", alpha=-2, epeak=300, beta=-2.5, ampl=1),
+                soft1s=dict(model="band", alpha=-1, epeak=300, beta=-2.5, ampl=1),
+                crabby8s=dict(model="powerlaw", alpha=-2, epeak=300, beta=-2.5, ampl=1),
+                crabby1s=dict(model="powerlaw", alpha=-2, epeak=300, beta=-2.5, ampl=1),
             )
         ))
 
@@ -394,11 +398,36 @@ class SourceAssumptions(DataAnalysis):
         data['byinstrument']['SPI']['erange_grb'] = dict(emin=25, emax=8000)
 
         self.data=data
-        self.duration_by_kind = dict(hard=1, soft=8)
+        self.duration_by_kind = dict(hard=1, soft=8, soft1s=1, crabby1s=1, crabby8s=8)
 
 class OperationStatus(DataAnalysis):
-    ibis_on = True
-    spi_on = True
+    cached=True
+
+    @property
+    def targets(self):
+        targets = []
+        if self.ibis_on:
+            targets += ["ISGRI", "IBIS/Veto"]
+        if self.spi_on:
+            targets += ["SPI-ACS", ]
+        return targets
+
+    def main(self):
+        ibis_on = True
+        spi_on = True
+
+class OperationsReport(DataAnalysis):
+    input_opsstatus=OperationStatus
+
+    def main(self):
+        if self.input_opsstatus.ibis_on and self.input_opsstatus.spi_on:
+            self.text="INTEGRAL was operating in nominal mode"
+        elif self.input_opsstatus.spi_on and not self.input_opsstatus.ibis_on:
+            self.text="INTEGRAL SPI-ACS was operating in nominal mode, while IBIS was not taking data"
+        elif self.input_opsstatus.ibis_on and not self.input_opsstatus.spi_on:
+            self.text="INTEGRAL IBIS was operating in nominal mode, while SPI-ACS was not taking data"
+        else:
+            self.text = "INTEGRAL was not operational"
 
 
 
@@ -408,6 +437,8 @@ class CountLimits(DataAnalysis):
     input_operation_status=OperationStatus
 
     cached=True
+
+    version="v2"
 
     @property
     def targets(self):
@@ -439,6 +470,13 @@ class CountLimits(DataAnalysis):
         if n_attempts<0:
             raise Exception("unable to reach the server in %i attempts!"%n_attempts)
 
+        if not hasattr(self,'hk'):
+            self.hk={}
+
+        if target not in self.hk:
+            self.hk[target]={}
+
+        self.hk[target][scale]=hk
 
         print(target, ":", scale, hk)
         return hk['count limit 3 sigma']
@@ -455,6 +493,45 @@ class CountLimits(DataAnalysis):
                     count_limits[kind][target] = self.get_count_limit(hkname[target], scale=self.input_assumptions.duration_by_kind[kind])
 
         self.count_limits=count_limits
+
+class BackgroundStabilityAssertion(DataAnalysis):
+    input_countlimits=CountLimits
+
+    def main(self):
+        excvar=[]
+        instabilities=[]
+        for target,t in self.input_countlimits.hk.items():
+            for scale,d in t.items():
+                print(d)
+
+                excvar.append(d['excvar'])
+                if d['maxsig']>6.:
+                    instabilities.append(d['excvar'])
+
+        if max(excvar)<1.3:
+            self.text="very stable"
+        elif max(excvar) < 1.7:
+            self.text = "stable"
+        elif max(excvar) < 3:
+            self.text = "somewhat unstable"
+        else:
+            self.text = "very unstable"
+
+        if len(instabilities)>0:
+            self.text+=" with some isolated features"
+
+
+
+
+class ScSystem(DataAnalysis):
+    input_target=Event
+
+    version="v2"
+
+    def main(self):
+        self.sc = ic.get_sc(self.input_target.trigger_time,
+                            ra=self.input_target.loc_parameters['ra'],
+                            dec=self.input_target.loc_parameters['dec'])
 
 class Responses(DataAnalysis):
     input_assumptions=SourceAssumptions
@@ -509,6 +586,52 @@ class Responses(DataAnalysis):
         for kind,v in self.responses.items():
             for instrument,mp in v.items():
                 healpy.mollview(mp,title=kind+" "+instrument)
+
+
+class OrientationComment(DataAnalysis):
+    input_responses = Responses
+    input_event = Event
+    input_opsstatus = OperationStatus
+
+    version="v2"
+
+    def main(self):
+        ra, dec = self.input_event.get_ra_dec()
+
+        assert len(self.input_responses.responses['hard']['SPI-ACS'])==len(ra)
+
+        i_peak = self.input_event.loc_region.argmin()
+        self.response_onpeak = dict([
+            [k, self.input_responses.responses['hard'][k][i_peak]] for k in self.input_opsstatus.targets
+        ])
+
+        self.response_best = dict([
+            [k, self.input_responses.responses['hard'][k].min()] for k in self.input_opsstatus.targets
+        ])
+
+        self.response_quality={}
+
+        for k in self.response_onpeak:
+            if self.response_onpeak[k]/self.response_best[k]<1.5:
+                self.response_quality[k]="near-optimal"
+            if self.response_onpeak[k]/self.response_best[k]<2.5:
+                self.response_quality[k]="somewhat suppressed"
+            else:
+                self.response_quality[k]="strongly suppressed"
+
+
+        print("peak", ra[i_peak], dec[i_peak], "response", self.response_onpeak)
+
+
+        self.text="This orientation implies "
+
+        if len(self.response_onpeak)==1:
+            k=self.response_onpeak.keys()[0]
+            self.text+=self.response_quality[k]+" response of "+k
+
+        #near-optimal
+        #    response of SPI-ACS, and this instrument provides best sensitivity to
+        #    both short and long GRBs."""
 
 
 class Sensitivities(DataAnalysis):
@@ -578,7 +701,7 @@ class Sensitivities(DataAnalysis):
 
         self.summary={}
 
-        for kind in "hard","soft":
+        for kind in "hard","soft", "soft1s", "crabby1s", "crabby8s":
             mp=self.sens_maps[kind]['best']
 
             self.summary[kind]=dict(
@@ -675,7 +798,7 @@ class Counterpart(DataAnalysis):
                 print(e, r.content)
 
             print(target, ":", scale, hk)
-            return hk['std bkg'] * (3 + hk['maxsig']) * hk['timebin']
+            return hk['std bkg'] * 3 * hk['timebin']
 
         if self.do_burst_analysis:
             def get_burst_counts(target):
