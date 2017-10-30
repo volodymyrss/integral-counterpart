@@ -26,6 +26,11 @@ import healpy
 import integralclient as ic
 
 from dataanalysis import core as da
+from dataanalysis import hashtools
+from dataanalysis.hashtools import shhash
+import  dataanalysis
+
+import datetime
 
 import numpy as np
 import integralclient
@@ -68,8 +73,149 @@ def healpix_galactic_to_fk5(mp):
 def grid_for_healpix_map(mp):
     return healpy.pix2ang(healpy.npix2nside(mp.shape[0]),np.arange(mp.shape[0]),lonlat=True)
 
+class CacheCounterparts(dataanalysis.caches.cache_core.CacheNoIndex):
+    def get_burst(self, hashe):
+        if isinstance(hashe, tuple):
+            if hashe[0] == "analysis":
+                if hashe[2].startswith('IceCubeEvent') or hashe[2].startswith('LIGOEvent'):
+                    return hashe[2]
+                return self.get_burst(hashe[1])
+            if hashe[0] == "list":  # more universaly
+                for k in hashe[1:]:
+                    r = self.get_burst(k)
+                    if r is not None:
+                        return r
+                return None
+            raise Exception("unknown tuple in the hash:" + str(hashe))
+        if hashe is None:
+            return None  # 'Any'
+        if isinstance(hashe, str):
+            return None
+        raise Exception("unknown class in the hash:" + str(hashe))
 
-class LIGOEvent(da.DataAnalysis):
+    def get_rev(self, hashe):
+        # if dataanalysis.printhook.global_log_enabled: print("search for rev in",hashe)
+        if isinstance(hashe, tuple):
+            if hashe[
+                0] == "analysis":  # more universaly
+                if hashe[2].startswith('Revolution'):
+                    return hashe[1]
+                return self.get_rev(hashe[1])
+            if hashe[
+                0] == "list":  # more universaly
+                for k in hashe[1:]:
+                    r = self.get_rev(k)
+                    if r is not None:
+                        return r
+                return None
+            raise Exception("unknown tuple in the hash:" + str(hashe))
+        if hashe is None:
+            return None
+        if isinstance(hashe, str):
+            return None
+        raise Exception("unknown class in the hash:" + str(hashe))
+
+    def hashe2signature(self, hashe):
+        scw = self.get_burst(hashe)
+        if scw is not None:
+            if isinstance(hashe, tuple):
+                if hashe[0] == "analysis":
+                    return hashe[2] + ":" + scw + ":" + shhash(hashe)[:8]
+            return shhash(hashe)[:8]
+
+        return hashe[2] + ":" + shhash(hashe)[:16]
+
+    def construct_cached_file_path(self, hashe, obj=None):
+        # print("will construct INTEGRAL cached file path for",hashe)
+
+        burst = self.get_burst(hashe)
+
+        def hash_to_path2(hashe):
+            return shhash(repr(hashe[1]))[:8]
+
+        if not isinstance(burst, str):
+            burst = None
+
+        if burst == "Any":
+            burst = None
+
+        rev = self.get_rev(hashe)
+        print("Rev in hashe:",rev)
+
+        if burst is None or len(burst.split(".",2))!=3:
+            if dataanalysis.printhook.global_log_enabled: print("not burst-grouped cache")
+
+            if rev is None:
+                r = self.filecacheroot + "/global/" + hashe[2] + "/"  + hash_to_path2(hashe) + "/"
+            else:
+                if dataanalysis.printhook.global_log_enabled: print("is rev-grouped cache")
+                hashe = hashtools.hashe_replace_object(hashe, rev, "any")
+                r = self.filecacheroot + "/byrev/" + rev + "/" + hashe[2] + "/" + hash_to_path2(hashe) + "/"  # choose to avoid overlapp
+        else:
+            #utc=burst.split(".")[2]
+            event_name = burst.split(".",2)[2]
+            #utc_date=datetime.datetime.strptime(utc, "%Y-%m-%dT%H:%M:%S.%f")
+
+            hashe = hashtools.hashe_replace_object(hashe, burst, "any")
+
+            # str("reduced hashe:",hashe,hash_to_path2(hashe))
+            # if dataanalysis.printhook.global_log_enabled: print("reduced hashe:",hashe,hash_to_path2(hashe))
+            #open("reduced_hashe.txt", "w").write(hash_to_path2(hashe) + "\n\n" + pprint.pformat(hashe) + "\n")
+            #print(burst, hashe[2], burst)
+
+            r = self.filecacheroot + "/byevent/"+event_name
+            #r += "/%.4i" % utc_date.year
+            #r += "/%.4i-%.2i" % (utc_date.year,utc_date.month)
+            #r += "/%.4i-%.2i-%.2i" % (utc_date.year,utc_date.month,utc_date.day)
+            #r += "/%s" % utc.replace(":","-")
+
+            r += "/" + hashe[2] + "/" + hash_to_path2(hashe) + "/"
+
+        # if dataanalysis.printhook.global_log_enabled: print("cached path:",r)
+
+        print(self, "cached path:", r)
+
+        return r  # choose to avoid overlapp
+
+IntegralCacheRoots=os.environ['INTEGRAL_DDCACHE_ROOT']
+
+CacheStack=[]
+
+for IntegralCacheRoot in IntegralCacheRoots.split(":"):
+    ro_flag=False
+    if IntegralCacheRoot.startswith("ro="):
+        ro_flag=True
+        IntegralCacheRoot=IntegralCacheRoot.replace("ro=","")
+
+    mcgfb=CacheCounterparts(IntegralCacheRoot)
+    mcgfb.readonly_cache=ro_flag
+    if CacheStack==[]:
+        CacheStack=[mcgfb]
+    else:
+        CacheStack[-1].parent=mcgfb
+        CacheStack.append(mcgfb)
+
+cache_counterpart=CacheStack[-1]
+
+class DataAnalysis(da.DataAnalysis):
+    store_preview_yaml=True
+
+    cache=cache_counterpart
+
+    def get_burst(self):
+        if self._da_locally_complete is not None:
+            try:
+                return "(completeburst:%s)"%self.cache.get_scw(self._da_locally_complete)
+            except:
+                return "(complete)"
+
+        for a in self.assumptions:
+            if isinstance(a,LIGOEvent) or isinstance(a,IceCubeEvent):
+                return "(burst:%s)"%str(a.t0_utc)
+
+        return ""
+
+class LIGOEvent(DataAnalysis):
 
     @property
     def loc_map(self):
@@ -96,7 +242,7 @@ class LIGOEvent(da.DataAnalysis):
             healpy.projtext(tr - 3, 3, "%i" % tr, lonlat=True)
 
 
-class IceCubeEvent(da.DataAnalysis):
+class IceCubeEvent(DataAnalysis):
     nside=128
 
     ic_name="unnamed"
@@ -105,8 +251,12 @@ class IceCubeEvent(da.DataAnalysis):
     def gname(self):
         return self.ic_name
 
+    @property
+    def trigger_time(self):
+        return self.event_time['utc']
+
     def get_version(self):
-        return self.get_signature()+"."+self.version+"."+self.ic_name
+        return self.get_signature()+"."+self.version+"."+self.ic_name+"."+self.trigger_time
 
     def get_ra_dec(self):
         npx = np.arange(healpy.nside2npix(self.nside))
@@ -172,7 +322,7 @@ class Event(da.DataAnalysis):
     def main(self):
         return self.event_kind
 
-class INTEGRALVisibility(da.DataAnalysis):
+class INTEGRALVisibility(DataAnalysis):
     input_target=Event
 
     minsolarangle=40
@@ -205,7 +355,7 @@ class INTEGRALVisibility(da.DataAnalysis):
         healpy.mollview(self.visibility_map)
         healpy.graticule()
 
-class SourceAssumptions(da.DataAnalysis):
+class SourceAssumptions(DataAnalysis):
 
     def main(self):
         data = {}
@@ -246,11 +396,27 @@ class SourceAssumptions(da.DataAnalysis):
         self.data=data
         self.duration_by_kind = dict(hard=1, soft=8)
 
+class OperationStatus(DataAnalysis):
+    ibis_on = True
+    spi_on = True
 
-class CountLimits(da.DataAnalysis):
+
+
+class CountLimits(DataAnalysis):
     input_target=Event
     input_assumptions=SourceAssumptions
+    input_operation_status=OperationStatus
 
+    cached=True
+
+    @property
+    def targets(self):
+        targets=[]
+        if self.input_operation_status.ibis_on:
+            targets+=["ISGRI", "IBIS/Veto"]
+        if self.input_operation_status.spi_on:
+            targets+=["SPI-ACS",]
+        return targets
 
     def get_count_limit(self,target, scale, nsig=None):
 
@@ -285,14 +451,16 @@ class CountLimits(da.DataAnalysis):
         for kind, model in self.input_assumptions.data['typical_spectra'].items():
             if kind in self.input_assumptions.duration_by_kind:
                 count_limits[kind] = {}
-                for target in ["SPI-ACS", "ISGRI", "IBIS/Veto"]:
+                for target in self.targets:
                     count_limits[kind][target] = self.get_count_limit(hkname[target], scale=self.input_assumptions.duration_by_kind[kind])
 
         self.count_limits=count_limits
 
-class Responses(da.DataAnalysis):
+class Responses(DataAnalysis):
     input_assumptions=SourceAssumptions
     input_target=Event
+
+    cached = True
 
     def main(self):
         CT = Counterpart()
@@ -343,11 +511,13 @@ class Responses(da.DataAnalysis):
                 healpy.mollview(mp,title=kind+" "+instrument)
 
 
-class Sensitivities(da.DataAnalysis):
+class Sensitivities(DataAnalysis):
     input_assumptions=SourceAssumptions
     input_target=Event
     input_countlimits=CountLimits
     input_responses=Responses
+
+    cached = True
 
     def main(self):
         sens_maps = {}
@@ -359,7 +529,7 @@ class Sensitivities(da.DataAnalysis):
             if kind in self.input_assumptions.duration_by_kind:
                 sens_maps[kind] = {}
                 sens_maps_gal[kind] = {}
-                for target in ["SPI-ACS", "ISGRI", "IBIS/Veto"]:
+                for target in self.input_countlimits.targets:
                     r = self.input_responses.responses[kind][target] * self.input_countlimits.count_limits[kind][target]
                     #r[CT.sky_coord.separation(self.input_bodiesbody_coord).degree < bd["body_size"]] = 1e9
 
@@ -371,6 +541,8 @@ class Sensitivities(da.DataAnalysis):
 
         self.sens_maps = sens_maps
         self.sens_maps_gal = sens_maps_gal
+
+        self.summarize()
 
     def plot(self):
         for kind, v in self.sens_maps.items():
@@ -404,15 +576,27 @@ class Sensitivities(da.DataAnalysis):
         lvt = self.input_target.loc_region
         lvt_prob = self.input_target.loc_map
 
+        self.summary={}
+
         for kind in "hard","soft":
             mp=self.sens_maps[kind]['best']
-            print("model", kind, "sensitivity extreme from",mp[lvt<90].min(),"to",mp[lvt<90].max())
+
+            self.summary[kind]=dict(
+                p90_min=mp[lvt < 90].min(),
+                p90_max=mp[lvt < 90].max(),
+                p50_min=mp[lvt < 50].min(),
+                p50_max=mp[lvt < 50].max(),
+                prob_within_1p5best=sum(lvt_prob[mp < 1.5 * mp[lvt < 90].min()]),
+            )
+
+            print("model", kind, "sensitivity in 90% containment extreme from",mp[lvt<90].min(),"to",mp[lvt<90].max())
+            print("model", kind, "sensitivity in 50% containment extreme from", mp[lvt < 50].min(), "to",mp[lvt < 50].max())
             print("model", kind, "sensitivity within 50% of best contains",sum(lvt_prob[mp<1.5*mp[lvt<90].min()]))
 
 
 
 
-class Counterpart(da.DataAnalysis):
+class Counterpart(DataAnalysis):
     input_target=Event
 
     syst = 0.2
