@@ -177,7 +177,7 @@ class CacheCounterparts(dataanalysis.caches.cache_core.CacheNoIndex):
 
         return r  # choose to avoid overlapp
 
-IntegralCacheRoots=os.environ['INTEGRAL_DDCACHE_ROOT']
+IntegralCacheRoots=os.environ.get('INTEGRAL_DDCACHE_ROOT',"./")
 
 CacheStack=[]
 
@@ -269,15 +269,15 @@ class IceCubeEvent(DataAnalysis):
 
             ra,dec = self.get_ra_dec()
 
-            p50_to_1sigma=1/norm.isf((1 - .50) / 2)/2
+            p90_to_1sigma = -norm.isf(1 - (1 - .9) / 2)
 
 
             dist_ra=(ra - self.loc_parameters['ra'])
             dist_ra[abs(dist_ra)>180]-=360
 
             self._loc_map=np.exp(
-                -0.5*(dist_ra/(p50_to_1sigma*np.mean(map(abs,self.loc_parameters['dra_p50']))))**2 \
-                -0.5*((dec - self.loc_parameters['dec']) / (p50_to_1sigma*np.mean(map(abs, self.loc_parameters['ddec_p50']))))**2
+                -0.5*(dist_ra/(p90_to_1sigma*np.mean(map(abs,self.loc_parameters['dra_p90']))))**2 \
+                -0.5*((dec - self.loc_parameters['dec']) / (p90_to_1sigma*np.mean(map(abs, self.loc_parameters['ddec_p90']))))**2
             )
 
             self._loc_map/=sum(self._loc_map)
@@ -403,6 +403,10 @@ class SourceAssumptions(DataAnalysis):
 class OperationStatus(DataAnalysis):
     cached=True
 
+    version="v2"
+
+    input_ic=IceCubeEvent
+
     @property
     def targets(self):
         targets = []
@@ -413,8 +417,7 @@ class OperationStatus(DataAnalysis):
         return targets
 
     def main(self):
-        ibis_on = True
-        spi_on = True
+        raise Exception("please override this for the given event")
 
 class OperationsReport(DataAnalysis):
     input_opsstatus=OperationStatus
@@ -625,9 +628,15 @@ class OrientationComment(DataAnalysis):
 
         self.text="This orientation implies "
 
-        if len(self.response_onpeak)==1:
-            k=self.response_onpeak.keys()[0]
-            self.text+=self.response_quality[k]+" response of "+k
+        k=self.response_onpeak.keys()[0]
+        self.text+=self.response_quality[k]+" response of "+k
+
+        for k in self.response_onpeak.keys()[1:-1]:
+            self.text += ", " + self.response_quality[k] + " response of " + k
+
+        k = self.response_onpeak.keys()[-1]
+        self.text += ", and " + self.response_quality[k] + " response of " + k
+
 
         #near-optimal
         #    response of SPI-ACS, and this instrument provides best sensitivity to
@@ -639,8 +648,11 @@ class Sensitivities(DataAnalysis):
     input_target=Event
     input_countlimits=CountLimits
     input_responses=Responses
+    input_opsstatus = OperationStatus
 
-    cached = True
+    copy_cached_input=False
+
+    cached = False
 
     def main(self):
         sens_maps = {}
@@ -652,7 +664,7 @@ class Sensitivities(DataAnalysis):
             if kind in self.input_assumptions.duration_by_kind:
                 sens_maps[kind] = {}
                 sens_maps_gal[kind] = {}
-                for target in self.input_countlimits.targets:
+                for target in self.input_opsstatus.targets:
                     r = self.input_responses.responses[kind][target] * self.input_countlimits.count_limits[kind][target]
                     #r[CT.sky_coord.separation(self.input_bodiesbody_coord).degree < bd["body_size"]] = 1e9
 
@@ -1284,6 +1296,13 @@ class Counterpart(DataAnalysis):
 
         plot.plot("rawsky.png")
 
+class FinalComment(DataAnalysis):
+    input_ic=IceCubeEvent
+
+    cached=True
+
+    def main(self):
+        raise Exception("please redefine")
 
 if __name__ == "__main__":
     import argparse
