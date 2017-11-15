@@ -355,6 +355,13 @@ class INTEGRALVisibility(DataAnalysis):
         healpy.mollview(self.visibility_map)
         healpy.graticule()
 
+class INTEGRALVisibilitySummary(DataAnalysis):
+    input_visibility=INTEGRALVisibility
+
+    def main(self):
+        self.peak_visible=self.input_visibility.peak_target_visible()
+
+
 class SourceAssumptions(DataAnalysis):
 
     version="v2"
