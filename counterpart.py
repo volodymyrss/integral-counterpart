@@ -347,9 +347,15 @@ class INTEGRALVisibility(DataAnalysis):
     def peak_target_visible(self):
         ra,dec=grid_for_healpix_map(self.visibility_map)
 
-        i=np.argmax(self.input_target.loc_map)
+        visible_map=np.copy(self.input_target.loc_map)
+        visible_map[self.visibility_map<0.5]=0
+
+        i=np.argmax(visible_map)
         return ra[i],dec[i]
 
+    @property
+    def nearest_to_peak_visible(self):
+        return []
 
     def plot(self):
         healpy.mollview(self.visibility_map)
@@ -360,6 +366,7 @@ class INTEGRALVisibilitySummary(DataAnalysis):
 
     def main(self):
         self.peak_visible=self.input_visibility.peak_target_visible()
+        self.total_visible=self.input_visibility.total_visible
 
 
 class SourceAssumptions(DataAnalysis):
