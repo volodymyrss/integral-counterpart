@@ -331,10 +331,12 @@ class INTEGRALVisibility(DataAnalysis):
     _da_settings=['minsolarangle','follow_up_delay']
 
     def main(self):
-        ijd0=float(ic.converttime("UTC", self.input_target.trigger_time, "IJD"))
-        ijd=ijd0+self.follow_up_delay
-
-        utc= ic.converttime("IJD", "%.20lg"%ijd, "UTC")
+        try:
+            ijd0=float(ic.converttime("UTC", self.input_target.trigger_time, "IJD"))
+            ijd=ijd0+self.follow_up_delay
+            utc= ic.converttime("IJD", "%.20lg"%ijd, "UTC")
+        except Exception as e:
+            utc=self.input_target.trigger_time
 
         self.visibility = integralvisibility.Visibility()
         self.visibility.minsolarangle = self.minsolarangle
