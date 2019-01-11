@@ -21,16 +21,13 @@ from astropy import units as u
 
 import integralvisibility
 
-import healpy
 
 import integralclient as ic
 
 from dataanalysis import core as da
 from dataanalysis import hashtools
 from dataanalysis.hashtools import shhash
-import  dataanalysis
-
-import datetime
+import dataanalysis
 
 import numpy as np
 import integralclient
@@ -317,10 +314,10 @@ class IceCubeEvent(DataAnalysis):
 class Event(da.DataAnalysis):
     run_for_hashe=True
 
-    event_kind=LIGOEvent
+    event_kind='LIGOEvent'
 
     def main(self):
-        return self.event_kind
+        return da.get_object(self.event_kind)
 
 class INTEGRALVisibility(DataAnalysis):
     input_target=Event
@@ -438,6 +435,7 @@ class OperationStatus(DataAnalysis):
 class OperationsReport(DataAnalysis):
     input_opsstatus=OperationStatus
 
+
     def main(self):
         if self.input_opsstatus.ibis_on and self.input_opsstatus.spi_on:
             self.text="INTEGRAL was operating in nominal mode"
@@ -456,6 +454,14 @@ class CountLimits(DataAnalysis):
     input_operation_status=OperationStatus
 
     cached=True
+
+    span_s=300
+
+    def get_version(self):
+        v=self.get_signature()+"."+self.version
+        if self.span_s!=600:
+            v+="_span_%.5lg"%self.span_s
+        return v
 
     version="v2"
 
@@ -476,7 +482,7 @@ class CountLimits(DataAnalysis):
                 hk = ic.get_hk(
                                 target=target,
                                 utc=self.input_target.trigger_time,
-                                span=600, t1=0, t2=0, ra=0, dec=0, rebin=scale,
+                                span=self.span_s, t1=0, t2=0, ra=0, dec=0, rebin=scale,
                                 vetofiltermargin=0.03
                             )['lc']
             except ic.ServiceException as e:

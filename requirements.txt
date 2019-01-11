@@ -1,0 +1,8 @@
+astropy
+scipy
+numpy
+healpy
+matplotlib
+-e git+https://github.com/volodymyrss/integral-visibility/
+-e git+https://github.com/volodymyrss/data-analysis/
+-e git+https://github.com/volodymyrss/healtics/
