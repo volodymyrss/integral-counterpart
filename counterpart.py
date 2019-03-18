@@ -271,13 +271,14 @@ class IceCubeEvent(DataAnalysis):
 
             dist_ra=(ra - self.loc_parameters['ra'])
             dist_ra[abs(dist_ra)>180]-=360
+                
 
             self._loc_map=np.exp(
-                -0.5*(dist_ra/(p90_to_1sigma*np.mean(map(abs,self.loc_parameters['dra_p90']))))**2 \
-                -0.5*((dec - self.loc_parameters['dec']) / (p90_to_1sigma*np.mean(map(abs, self.loc_parameters['ddec_p90']))))**2
+                -0.5*(dist_ra/(p90_to_1sigma*np.mean(np.abs(np.array(self.loc_parameters['dra_p90'])))))**2  \
+                -0.5*(dec - self.loc_parameters['dec']) / (p90_to_1sigma*np.mean(np.abs(np.array(self.loc_parameters['ddec_p90']))))**2
             )
 
-            self._loc_map/=sum(self._loc_map)
+            self._loc_map/=np.sum(self._loc_map)
 
         return self._loc_map
 
@@ -618,7 +619,7 @@ class OrientationComment(DataAnalysis):
     input_event = Event
     input_opsstatus = OperationStatus
 
-    version="v2"
+    version="v2.2"
 
     def main(self):
         ra, dec = self.input_event.get_ra_dec()
@@ -639,10 +640,15 @@ class OrientationComment(DataAnalysis):
         for k in self.response_onpeak:
             if self.response_onpeak[k]/self.response_best[k]<1.5:
                 self.response_quality[k]="near-optimal"
-            if self.response_onpeak[k]/self.response_best[k]<2.5:
+                print("->",self.response_quality[k])
+            elif self.response_onpeak[k]/self.response_best[k]<2.5:
                 self.response_quality[k]="somewhat suppressed"
+                print("->",self.response_quality[k])
             else:
                 self.response_quality[k]="strongly suppressed"
+                print("->",self.response_quality[k])
+
+            print("response of", k,"on-peak",self.response_onpeak[k], "best", self.response_best[k], "ratio", self.response_onpeak[k]/self.response_best[k], "quality", self.response_quality[k])
 
 
         print("peak", ra[i_peak], dec[i_peak], "response", self.response_onpeak)
@@ -650,13 +656,13 @@ class OrientationComment(DataAnalysis):
 
         self.text="This orientation implies "
 
-        k=self.response_onpeak.keys()[0]
+        k=list(self.response_onpeak.keys())[0]
         self.text+=self.response_quality[k]+" response of "+k
 
-        for k in self.response_onpeak.keys()[1:-1]:
+        for k in list(self.response_onpeak.keys())[1:-1]:
             self.text += ", " + self.response_quality[k] + " response of " + k
 
-        k = self.response_onpeak.keys()[-1]
+        k = list(self.response_onpeak.keys())[-1]
         self.text += ", and " + self.response_quality[k] + " response of " + k
 
 
