@@ -486,7 +486,8 @@ class CountLimits(DataAnalysis):
                                 span=self.span_s, t1=0, t2=0, ra=0, dec=0, rebin=scale,
                                 vetofiltermargin=0.03
                             )['lc']
-            except ic.ServiceException as e:
+            except Exception as e:
+            #except ic.ServiceException as e:
                 print("waiting...",e)
                 time.sleep(1)
                 n_attempts-=1
